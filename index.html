@@ -465,12 +465,12 @@
     position:absolute;left:50%;top:30%;transform:translate(-50%,-50%);
     font-family:var(--serif);font-weight:400;line-height:1;white-space:nowrap;
     font-size:clamp(72px,13vw,168px);letter-spacing:.02em;
-    color:rgba(238,235,228,.075);opacity:0;
+    color:rgba(238,235,228,.12);opacity:0;
   }
   #voyageNum sup{font-size:.4em;vertical-align:super;letter-spacing:.06em}
   #voyageNum em{
     font-style:normal;font-size:.1em;letter-spacing:.5em;
-    vertical-align:middle;margin-left:.4em;color:rgba(238,235,228,.22);
+    vertical-align:middle;margin-left:.4em;color:rgba(238,235,228,.4);
   }
   #voyageNum.pop{animation:vnum .9s cubic-bezier(.2,.7,.2,1) both}
   @keyframes vnum{
@@ -511,13 +511,20 @@
   }
   #vread{
     position:absolute;left:50%;top:138px;transform:translateX(-50%);
-    font-family:var(--mono);font-size:10px;letter-spacing:.22em;
-    color:var(--sand-dim);white-space:nowrap;
+    font-family:var(--mono);font-size:11px;letter-spacing:.22em;
+    color:var(--sand);white-space:nowrap;
+    text-shadow:0 1px 6px rgba(0,0,0,.9);
+  }
+  #vcap{
+    position:absolute;left:50%;top:158px;transform:translateX(-50%);
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.34em;
+    color:rgba(238,235,228,.32);white-space:nowrap;
     text-shadow:0 1px 6px rgba(0,0,0,.9);
   }
   @media (max-width:900px){
     #vruler{top:64px;width:76vw}
-    #vread{top:112px;font-size:9px;letter-spacing:.16em}
+    #vread{top:112px;font-size:9.5px;letter-spacing:.16em}
+    #vcap{top:130px;font-size:8px;letter-spacing:.24em}
     #voyageNum{top:32%}
   }
 </style>
@@ -541,6 +548,7 @@
   <div id="voyageNum">10<sup>12</sup><em>米</em></div>
   <div id="vruler"><div id="vrTrack"></div><i class="vneedle"></i></div>
   <div id="vread">1.0 × 10¹² 米</div>
+  <div id="vcap">对 数 尺 度 · 每 一 格 十 倍</div>
 </div>
 
 <header class="top">
@@ -746,6 +754,17 @@
       hotspots: [{ x: 50, y: 46, t: '星系', d: '画面中每一个模糊的光斑都包含数百亿颗恒星。你看到的，是它们几亿年前的样子。' }]
     }
   ];
+
+  /* 每一站的“活着”程度：高光是灯光/星点的闪烁，depthK 是深度视差的力度。
+     所有静态影像都配了一张单目深度图（tools/make_depth.py 生成），
+     于是每张照片都能跟着指针做轻微的分层位移，变成一张“活的照片”。 */
+  var STAGE_LIFE = [0.35, 0.55, 1.0, 0.6, 0.35, 0.32, 0.7, 1.0, 0.85, 0.7, 0.95];
+  var STAGE_DEPTH = [1.0, 1.35, 1.1, 1.25, 0.85, 1.0, 0.6, 0.85, 0.8, 0.7, 0.5];
+  for (var _si = 0; _si < STAGES.length; _si++) {
+    STAGES[_si].life = STAGE_LIFE[_si];
+    STAGES[_si].depthK = STAGE_DEPTH[_si];
+    STAGES[_si].depth = STAGES[_si].img.replace('/img/', '/depth/').replace(/\.(jpg|png)$/i, '.jpg');
+  }
 
   /* 太阳系：视觉尺寸与轨道半径（非等比例，为了构图） */
   var SOLAR = [
@@ -958,9 +977,30 @@
     'precision mediump float;',
     'varying vec2 vUv;',
     'uniform sampler2D uTex;',
+    'uniform sampler2D uDepth;',
     'uniform float uOpacity;',
+    'uniform vec2 uPar;',
+    'uniform float uDepthK;',
+    'uniform float uTime;',
+    'uniform float uLife;',
+    'uniform float uNoDepth;',
     'void main(){',
-    '  vec3 c = texture2D(uTex, vUv).rgb;',
+    /* 单张照片的深度视差：越近的地方跟手位移越大 */
+    '  float d = texture2D(uDepth, vUv).r;',
+    '  vec2 uv = vUv + uPar * (d - 0.5) * uDepthK * (1.0 - uNoDepth);',
+    /* 极慢的呼吸，静止时画面也在活着 */
+    '  float t = uTime;',
+    '  uv += vec2(sin(t * 0.11 + vUv.y * 0.7), cos(t * 0.09 + vUv.x * 0.6)) * 0.0018 * uLife;',
+    '  vec3 c = texture2D(uTex, uv).rgb;',
+    /* 高光呼吸：城市灯火、星点会微微闪烁 */
+    '  float lum = dot(c, vec3(0.299, 0.587, 0.114));',
+    '  float tw = sin(t * 1.6 + vUv.x * 137.0 + vUv.y * 91.0) * 0.5 + 0.5;',
+    '  float tw2 = sin(t * 0.83 + vUv.x * 53.0 - vUv.y * 71.0) * 0.5 + 0.5;',
+    '  float sparkle = (tw * 0.62 + tw2 * 0.38 - 0.52) * smoothstep(0.34, 0.92, lum);',
+    '  c *= 1.0 + sparkle * 0.12 * uLife;',
+    /* 边缘压暗一点点，镜头味 */
+    '  vec2 q = vUv - 0.5;',
+    '  c *= 1.0 - dot(q, q) * 0.10;',
     '  c = c * 0.965 + vec3(0.008, 0.010, 0.016);',
     '  gl_FragColor = vec4(c, uOpacity);',
     '}'
@@ -1188,7 +1228,13 @@
       uvScale: gl.getUniformLocation(progQ, 'uUvScale'),
       uvOffset: gl.getUniformLocation(progQ, 'uUvOffset'),
       tex: gl.getUniformLocation(progQ, 'uTex'),
-      opacity: gl.getUniformLocation(progQ, 'uOpacity')
+      depth: gl.getUniformLocation(progQ, 'uDepth'),
+      opacity: gl.getUniformLocation(progQ, 'uOpacity'),
+      par: gl.getUniformLocation(progQ, 'uPar'),
+      depthK: gl.getUniformLocation(progQ, 'uDepthK'),
+      time: gl.getUniformLocation(progQ, 'uTime'),
+      life: gl.getUniformLocation(progQ, 'uLife'),
+      noDepth: gl.getUniformLocation(progQ, 'uNoDepth')
     };
     uP = {
       proj: gl.getUniformLocation(progP, 'uProj'),
@@ -1369,7 +1415,7 @@
   }
 
   /* ---------- 星球贴图：有图用图，没图用占位色 ---------- */
-  var texEarthDay = null, texEarthNight = null, texMoon = null, texBlack = null, texClouds = null;
+  var texEarthDay = null, texEarthNight = null, texMoon = null, texBlack = null, texClouds = null, texMid = null;
   function solidTex(r, g, b) {
     var t = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, t);
@@ -1428,6 +1474,7 @@
     texEarthNight = solidTex(6, 9, 16);
     texMoon = solidTex(120, 118, 112);
     texBlack = solidTex(0, 0, 0);
+    texMid = solidTex(128, 128, 128);
     texClouds = (function () {
       var t = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
@@ -1448,7 +1495,7 @@
   var planes = STAGES.map(function (s, i) {
     var m = /([\d.]+)%\s+([\d.]+)%/.exec(s.pos || '50% 50%');
     return {
-      tex: null, opacity: 0, aspect: 1, ready: false, started: false,
+      tex: null, depth: null, opacity: 0, aspect: 1, ready: false, started: false,
       posX: m ? parseFloat(m[1]) / 100 : 0.5,
       posY: m ? parseFloat(m[2]) / 100 : 0.5
     };
@@ -1486,6 +1533,31 @@
       drawScene();
     };
     img.src = STAGES[i].img;
+
+    /* 深度图很小（约 20 KB），和原图并行取；到了才有 3D 视差 */
+    var dz = new Image();
+    dz.onload = function () {
+      if (!GL_OK) return;
+      var dt = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, dt);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, dz);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      planes[i].depth = dt;
+      /* 再存一份极小的深度图到内存，供热点跟着视差一起位移 */
+      var dw = 96, dh = Math.max(2, Math.round(dw * dz.height / dz.width));
+      var dc = document.createElement('canvas');
+      dc.width = dw; dc.height = dh;
+      var dctx = dc.getContext('2d');
+      dctx.drawImage(dz, 0, 0, dw, dh);
+      planes[i].dd = dctx.getImageData(0, 0, dw, dh).data;
+      planes[i].dw = dw; planes[i].dh = dh;
+      drawScene();
+    };
+    dz.src = STAGES[i].depth;
   }
 
   /* 只加载当前站前后两站，避免一次性拉满 6.5 MB */
@@ -1499,6 +1571,13 @@
   var FOV = 50 * Math.PI / 180;
   var projMat = null, baseW = 1, baseH = 1;
   var camX = 0, camY = 0, camTX = 0, camTY = 0, camRaf = null;
+  /* 活的照片：连续时间 + 指针视差 */
+  var lifeTime = 0, parX = 0, parY = 0, parTX = 0, parTY = 0, lastParX = 0, lastParY = 0;
+  window.addEventListener('pointermove', function (e) {
+    parTX = (e.clientX / window.innerWidth - 0.5) * 2;
+    parTY = (e.clientY / window.innerHeight - 0.5) * 2;
+  });
+  window.addEventListener('pointerleave', function () { parTX = 0; parTY = 0; });
   var viewMat = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
   var activePlane = { px: 0, py: 0, z: -10, w: 1, h: 1 };
 
@@ -1622,6 +1701,8 @@
     gl.uniformMatrix4fv(uQ.view, false, viewMat);
     bindAttr(progQ, 'aP', quadBuf, 2);
     gl.uniform1i(uQ.tex, 0);
+    gl.uniform1i(uQ.depth, 1);
+    gl.uniform1f(uQ.time, lifeTime);
 
     /* 目标图还没解码完时，让最近一张已就绪的图撑住建场，避免中途只剩星空 */
     var bestIdx = 0, bestO = -1;
@@ -1690,7 +1771,13 @@
       gl.bindTexture(gl.TEXTURE_2D, blackTex);
       gl.uniform2f(uQ.uvScale, 1, 1);
       gl.uniform2f(uQ.uvOffset, 0, 0);
+      gl.uniform2f(uQ.par, 0, 0);
+      gl.uniform1f(uQ.depthK, 0);
+      gl.uniform1f(uQ.life, 0);
+      gl.uniform1f(uQ.noDepth, 1);
       gl.uniform1f(uQ.opacity, plateA);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, texMid);
       for (var di = 0; di < drawn.length; di++) {
         var d0 = drawn[di];
         gl.uniform3f(uQ.pos, d0.px, d0.py, -D * 1.006);
@@ -1704,6 +1791,11 @@
       if (dd0.idx === active) {
         activePlane.px = dd0.px; activePlane.py = dd0.py; activePlane.z = -D;
         activePlane.w = baseW * dd0.f; activePlane.h = baseH * dd0.f;
+        activePlane.uvSx = dd0.uvSx; activePlane.uvSy = dd0.uvSy;
+        activePlane.uvOx = dd0.uvOx; activePlane.uvOy = dd0.uvOy;
+        activePlane.depthK = STAGES[dd0.idx].depthK;
+        activePlane.life = STAGES[dd0.idx].life;
+        activePlane.pl = dd0.pl;
       }
       gl.uniform3f(uQ.pos, dd0.px, dd0.py, -D);
       gl.uniform2f(uQ.size, baseW * dd0.f, baseH * dd0.f);
@@ -1712,6 +1804,17 @@
       gl.uniform1f(uQ.opacity, dd0.op * (1 - earthMix) * (1 - solarMix) * (1 - galaxyMix) *
         (1 - 0.8 * Math.sin(Math.PI * earthMix)) * (1 - 0.8 * Math.sin(Math.PI * solarMix)) *
         (1 - 0.8 * Math.sin(Math.PI * galaxyMix)));
+      /* 深度视差：指针带着近景走，远景几乎不动 */
+      var stg = STAGES[dd0.idx];
+      lastParX = parX * 0.022 + Math.sin(lifeTime * 0.21) * 0.0035;
+      lastParY = parY * 0.018 + Math.cos(lifeTime * 0.17) * 0.0028;
+      gl.uniform2f(uQ.par, lastParX, lastParY);
+      gl.uniform1f(uQ.depthK, stg.depthK);
+      gl.uniform1f(uQ.life, stg.life);
+      gl.uniform1f(uQ.noDepth, dd0.pl.depth ? 0 : 1);
+      gl.uniform1f(uQ.time, lifeTime);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, dd0.pl.depth || texMid);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, dd0.pl.tex);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -1760,6 +1863,22 @@
       var h = s.hotspots[k];
       var wx = activePlane.px + (h.x / 100 - 0.5) * activePlane.w;
       var wy = activePlane.py - (h.y / 100 - 0.5) * activePlane.h;
+      /* 补偿深度视差：热点要跟着画面那一块一起动 */
+      var apl = activePlane.pl;
+      if (apl && apl.dd && activePlane.uvSx) {
+        var hu = (h.x / 100) * activePlane.uvSx + activePlane.uvOx;
+        var hv = (h.y / 100) * activePlane.uvSy + activePlane.uvOy;
+        var hx8 = Math.round(clamp(hu, 0, 1) * (apl.dw - 1));
+        var hy8 = Math.round(clamp(hv, 0, 1) * (apl.dh - 1));
+        var dv2 = apl.dd[(hy8 * apl.dw + hx8) * 4] / 255;
+        var du = lastParX * (dv2 - 0.5) * activePlane.depthK;
+        var dv = lastParY * (dv2 - 0.5) * activePlane.depthK;
+        var br = 0.0018 * activePlane.life;
+        du += Math.sin(lifeTime * 0.11 + hv * 0.7) * br;
+        dv += Math.cos(lifeTime * 0.09 + hu * 0.6) * br;
+        wx += du * activePlane.w / activePlane.uvSx;
+        wy -= dv * activePlane.h / activePlane.uvSy;
+      }
       var pt = projectPoint([wx, wy, activePlane.z], viewMat, W, H);
       if (pt) {
         hotspotBtns[k].style.left = pt.x.toFixed(1) + 'px';
@@ -2995,6 +3114,9 @@
   function idleLoop(ts) {
     if (!t0) t0 = ts;
     var t = (ts - t0) / 1000;
+    lifeTime = ts * 0.001;
+    parX += (parTX - parX) * 0.06;
+    parY += (parTY - parY) * 0.06;
     var tx = camTX + (reduceMotion ? 0 : Math.sin(t * 0.23) * 0.05);
     var ty = camTY + (reduceMotion ? 0 : Math.cos(t * 0.19) * 0.032);
     camX += (tx - camX) * 0.06;
