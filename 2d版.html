@@ -1,0 +1,988 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>一页纸的宇宙 · 从一粒沙到可观测宇宙</title>
+<meta name="description" content="用真实的 NASA 影像，从一粒沙一路退到可观测宇宙的边缘。11 个尺度，一段连续的旅程。" />
+<style>
+  :root{
+    --ink:#eeebe4;
+    --muted:rgba(238,235,228,.56);
+    --faint:rgba(238,235,228,.28);
+    --line:rgba(238,235,228,.13);
+    --sand:#d8b98c;
+    --sand-dim:rgba(216,185,140,.55);
+    --serif:"Songti SC","Source Han Serif SC","Noto Serif SC","SimSun","STSong",Georgia,serif;
+    --mono:"SF Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:#04050a;color:var(--ink);overflow:hidden;
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,-apple-system,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  img{display:block}
+
+  /* ============ 舞台 ============ */
+  #stage{position:fixed;inset:0;overflow:hidden;background:#04050a;touch-action:none;cursor:grab}
+  #stage.dragging{cursor:grabbing}
+  .layer{
+    position:absolute;inset:-3%;opacity:0;visibility:hidden;
+    will-change:opacity,transform;transform-origin:50% 50%;
+    backface-visibility:hidden;
+  }
+  .layer img{
+    width:100%;height:100%;object-fit:cover;
+    filter:brightness(.94) contrast(1.06) saturate(1.04);
+  }
+  .layer.live img{animation:drift 42s ease-in-out infinite alternate}
+  @keyframes drift{
+    from{transform:scale(1.02) translate3d(-.4%,-.3%,0)}
+    to{transform:scale(1.09) translate3d(.5%,.4%,0)}
+  }
+
+  /* 深空跃迁时的黑场 */
+  #void{
+    position:fixed;inset:0;background:#04050a;opacity:0;pointer-events:none;z-index:3;
+  }
+
+  /* 胶片颗粒 + 暗角 */
+  #grain{
+    position:fixed;inset:0;z-index:4;pointer-events:none;opacity:.055;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+  }
+  #vignette{
+    position:fixed;inset:0;z-index:5;pointer-events:none;
+    background:
+      radial-gradient(120% 90% at 50% 46%,transparent 38%,rgba(4,5,10,.58) 100%),
+      linear-gradient(to bottom,rgba(4,5,10,.55),transparent 18%,transparent 52%,rgba(4,5,10,.66) 100%);
+  }
+
+  /* ============ 顶栏 ============ */
+  .top{
+    position:fixed;top:0;left:0;right:0;z-index:20;
+    display:flex;align-items:flex-start;justify-content:space-between;
+    padding:26px 30px;pointer-events:none;
+  }
+  .brand{pointer-events:auto;display:flex;flex-direction:column;gap:5px}
+  .brand b{font-family:var(--serif);font-weight:600;font-size:15px;letter-spacing:.34em}
+  .brand span{font-size:9.5px;letter-spacing:.36em;color:var(--faint);font-family:var(--mono)}
+  .top-actions{display:flex;gap:8px;pointer-events:auto}
+  .ghost-btn{
+    border:1px solid var(--line);border-radius:999px;padding:6px 14px;
+    font-size:11.5px;letter-spacing:.1em;color:var(--muted);transition:all .2s;
+    backdrop-filter:blur(6px);background:rgba(10,12,18,.25);
+  }
+  .ghost-btn:hover{color:var(--ink);border-color:rgba(238,235,228,.32)}
+
+  /* ============ 右侧章节栏 ============ */
+  .rail{
+    position:fixed;right:20px;top:50%;transform:translateY(-50%);
+    z-index:20;display:flex;flex-direction:column;gap:2px;
+    padding:14px 12px;border-radius:22px;
+    background:linear-gradient(to right,rgba(4,5,10,0),rgba(4,5,10,.32));
+  }
+  .rail-item{
+    display:flex;align-items:center;justify-content:flex-end;gap:10px;
+    padding:7px 0;opacity:.42;transition:opacity .25s;
+  }
+  .rail-item:hover,.rail-item.active{opacity:1}
+  .rail-label{
+    font-size:11px;letter-spacing:.12em;color:var(--muted);
+    opacity:0;transform:translateX(6px);transition:all .25s;white-space:nowrap;
+  }
+  .rail-item:hover .rail-label,.rail-item.active .rail-label{opacity:1;transform:none}
+  .rail-item.active .rail-label{color:var(--sand)}
+  .rail-dot{
+    width:6px;height:6px;border-radius:50%;background:rgba(238,235,228,.5);
+    transition:all .25s;flex:none;box-shadow:0 0 0 1px rgba(4,5,10,.55);
+  }
+  .rail-item.active .rail-dot{width:8px;height:8px;background:var(--sand);box-shadow:0 0 0 1px rgba(4,5,10,.55),0 0 14px rgba(216,185,140,.85)}
+  .rail-item.done .rail-dot{background:rgba(238,235,228,.32)}
+
+  /* ============ 热点 ============ */
+  #hotspots{position:fixed;inset:0;z-index:12;pointer-events:none}
+  .hotspot{
+    position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;
+    pointer-events:auto;border-radius:50%;
+  }
+  .hotspot::before{
+    content:"";position:absolute;inset:7px;border-radius:50%;
+    background:var(--sand);box-shadow:0 0 0 1px rgba(4,5,10,.6),0 0 16px rgba(216,185,140,.8);
+  }
+  .hotspot::after{
+    content:"";position:absolute;inset:0;border-radius:50%;
+    border:1px solid rgba(216,185,140,.55);animation:pulse 2.8s ease-out infinite;
+  }
+  @keyframes pulse{
+    0%{transform:scale(.55);opacity:.9}
+    70%{transform:scale(1.35);opacity:0}
+    100%{opacity:0}
+  }
+  .hotspot-hint{
+    position:absolute;left:50%;top:-30px;transform:translateX(-50%);
+    font-size:11px;letter-spacing:.1em;white-space:nowrap;color:var(--ink);
+    background:rgba(8,10,16,.72);border:1px solid var(--line);
+    padding:4px 9px;border-radius:5px;opacity:0;transition:opacity .2s;
+    backdrop-filter:blur(6px);
+  }
+  .hotspot:hover .hotspot-hint{opacity:1}
+
+  /* ============ 底部 HUD ============ */
+  .hud{
+    position:fixed;left:0;right:0;bottom:0;z-index:20;
+    display:grid;grid-template-columns:minmax(230px,auto) minmax(0,1fr) auto;
+    align-items:end;gap:36px;padding:86px 30px 26px;
+    background:linear-gradient(to top,rgba(4,5,10,.96) 0%,rgba(4,5,10,.86) 26%,rgba(4,5,10,.55) 58%,transparent 100%);
+  }
+  .hud-left{display:flex;flex-direction:column;gap:8px;min-width:0}
+  .scale-line{display:flex;align-items:baseline;gap:8px;font-family:var(--mono);color:var(--sand)}
+  .scale-line .pow{font-size:clamp(22px,2.4vw,30px);letter-spacing:.02em;line-height:1}
+  .scale-line .unit{font-size:12px;letter-spacing:.1em;opacity:.7}
+  .fov{font-size:11.5px;letter-spacing:.08em;color:rgba(238,235,228,.52)}
+  .stage-name{
+    margin:2px 0 0;font-family:var(--serif);font-weight:600;
+    font-size:clamp(26px,3.4vw,42px);letter-spacing:.12em;line-height:1.1;
+  }
+  .hud-mid{padding-bottom:4px;max-width:52ch}
+  .fact{margin:0;font-size:14.5px;line-height:1.8;color:rgba(238,235,228,.78);transition:opacity .3s}
+  .human{
+    margin-top:9px;font-size:11.5px;letter-spacing:.06em;color:var(--sand-dim);
+    display:flex;align-items:center;gap:8px;
+  }
+  .human::before{content:"";width:14px;height:1px;background:var(--sand-dim);flex:none}
+
+  .hud-right{display:flex;flex-direction:column;gap:12px;align-items:flex-end;width:min(36vw,340px)}
+  .ctl{display:flex;gap:8px}
+  .pill{
+    border:1px solid var(--line);border-radius:999px;padding:7px 15px;
+    font-size:11.5px;letter-spacing:.12em;color:var(--muted);transition:all .2s;
+    background:rgba(10,12,18,.3);backdrop-filter:blur(6px);white-space:nowrap;
+  }
+  .pill:hover{color:var(--ink);border-color:rgba(238,235,228,.32)}
+  .pill.on{background:var(--sand);color:#191209;border-color:var(--sand)}
+  .slider-wrap{width:100%;position:relative}
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;width:100%;height:20px;background:transparent;
+    margin:0;outline:none;cursor:pointer;
+  }
+  input[type=range]::-webkit-slider-runnable-track{height:1.5px;background:rgba(238,235,228,.18)}
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:11px;height:11px;border-radius:50%;background:var(--sand);
+    margin-top:-4.8px;box-shadow:0 0 0 3px rgba(216,185,140,.16);transition:box-shadow .2s;
+  }
+  input[type=range]:active::-webkit-slider-thumb{box-shadow:0 0 0 7px rgba(216,185,140,.22)}
+  input[type=range]::-moz-range-track{height:1.5px;background:rgba(238,235,228,.18)}
+  input[type=range]::-moz-range-thumb{width:11px;height:11px;border:0;border-radius:50%;background:var(--sand)}
+  .ticks{position:relative;height:12px;margin-top:1px}
+  .tick{
+    position:absolute;top:0;width:1px;height:4px;background:rgba(238,235,228,.2);
+    cursor:pointer;transform:translateX(-.5px);transition:background .2s,height .2s;
+  }
+  .tick:hover{height:8px;background:var(--sand-dim)}
+  .tick.active{height:8px;background:var(--sand)}
+
+  /* ============ 跃迁提示 ============ */
+  #voidLabel{
+    position:fixed;inset:0;z-index:14;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:14px;pointer-events:none;opacity:0;
+  }
+  #voidLabel .kicker{
+    font-family:var(--mono);font-size:10px;letter-spacing:.4em;color:var(--faint);
+  }
+  #voidLabel p{
+    margin:0;font-family:var(--serif);font-size:clamp(17px,2.2vw,23px);
+    letter-spacing:.22em;color:rgba(238,235,228,.82);text-align:center;
+  }
+  #skipBtn{
+    pointer-events:auto;margin-top:6px;font-size:11.5px;letter-spacing:.14em;
+    color:var(--sand);border-bottom:1px solid rgba(216,185,140,.4);padding-bottom:3px;
+  }
+
+  /* ============ 抽屉 ============ */
+  .drawer{
+    position:fixed;top:0;right:0;bottom:0;width:min(420px,92vw);z-index:40;
+    background:rgba(8,10,16,.9);backdrop-filter:blur(22px);
+    border-left:1px solid var(--line);
+    transform:translateX(102%);transition:transform .45s cubic-bezier(.22,.8,.24,1);
+    display:flex;flex-direction:column;
+  }
+  .drawer.open{transform:none}
+  .drawer-head{
+    padding:26px 28px 18px;border-bottom:1px solid var(--line);
+    display:flex;align-items:flex-start;justify-content:space-between;gap:16px;
+  }
+  .drawer-kicker{font-family:var(--mono);font-size:10px;letter-spacing:.3em;color:var(--sand-dim)}
+  .drawer-title{margin:8px 0 0;font-family:var(--serif);font-size:27px;letter-spacing:.1em}
+  .drawer-scale{margin-top:6px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .close-x{
+    width:32px;height:32px;border-radius:50%;border:1px solid var(--line);
+    display:grid;place-items:center;color:var(--muted);flex:none;
+  }
+  .close-x:hover{color:var(--ink)}
+  .drawer-body{padding:22px 28px 30px;overflow-y:auto;flex:1}
+  .drawer-body p{margin:0 0 14px;font-size:14px;line-height:1.85;color:rgba(238,235,228,.78)}
+  .drawer-body h4{
+    margin:24px 0 10px;font-size:10.5px;letter-spacing:.26em;color:var(--faint);
+    font-weight:500;text-transform:uppercase;
+  }
+  .credit{font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--faint)}
+  .drawer-foot{
+    border-top:1px solid var(--line);padding:14px 22px;display:flex;justify-content:space-between;gap:10px;
+  }
+  .nav-btn{font-size:11.5px;letter-spacing:.1em;color:var(--muted);padding:7px 4px}
+  .nav-btn:hover{color:var(--sand)}
+  .nav-btn:disabled{opacity:.2;cursor:default}
+
+  /* ============ 开场 ============ */
+  .intro{
+    position:fixed;inset:0;z-index:60;display:grid;place-items:center;
+    background:#04050a;transition:opacity .9s ease,visibility .9s;
+    text-align:center;padding:30px;
+  }
+  .intro.hide{opacity:0;visibility:hidden}
+  .intro-bg{
+    position:absolute;inset:0;background:url("assets/img/deepfield.jpg") center/cover;
+    opacity:.22;filter:blur(2px) brightness(.7);
+  }
+  .intro-inner{position:relative;max-width:640px}
+  .intro .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.42em;color:var(--sand-dim)}
+  .intro h1{
+    margin:22px 0 16px;font-family:var(--serif);font-weight:600;
+    font-size:clamp(38px,6vw,64px);letter-spacing:.16em;line-height:1.18;
+  }
+  .intro p{margin:0 auto 30px;max-width:44ch;font-size:14px;line-height:1.9;color:var(--muted)}
+  .start-btn{
+    border:1px solid rgba(216,185,140,.6);color:var(--sand);border-radius:999px;
+    padding:13px 40px;font-size:13px;letter-spacing:.22em;transition:all .25s;
+  }
+  .start-btn:hover{background:var(--sand);color:#191209}
+  .intro-hint{margin-top:26px;font-size:11px;letter-spacing:.12em;color:var(--faint)}
+  .intro-hint kbd{font-family:inherit;border:1px solid var(--line);border-radius:3px;padding:1px 5px}
+
+  /* ============ 帮助 ============ */
+  .modal{
+    position:fixed;inset:0;z-index:70;display:none;place-items:center;padding:24px;
+    background:rgba(4,5,10,.72);backdrop-filter:blur(8px);
+  }
+  .modal.open{display:grid}
+  .modal-card{
+    width:min(440px,100%);background:#0a0c13;border:1px solid var(--line);
+    border-radius:14px;padding:26px 28px;
+  }
+  .modal-card h3{margin:0 0 18px;font-family:var(--serif);font-size:19px;letter-spacing:.12em}
+  .key-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(238,235,228,.06);font-size:12.5px;color:var(--muted)}
+  .key-row kbd{font-family:var(--mono);font-size:11px;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 7px}
+
+  .toast{
+    position:fixed;left:50%;bottom:110px;transform:translate(-50%,10px);z-index:80;
+    background:rgba(216,185,140,.94);color:#191209;font-size:12px;letter-spacing:.08em;
+    padding:9px 18px;border-radius:999px;opacity:0;pointer-events:none;transition:all .3s;
+  }
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+
+  /* ============ 响应式 ============ */
+  @media (max-width:900px){
+    .hud{grid-template-columns:1fr;gap:12px;padding:78px 20px 18px}
+    .hud-mid{display:block;order:2;max-width:none}
+    .fact{font-size:13px;line-height:1.65}
+    .human{font-size:10.5px;margin-top:7px}
+    .hud-right{order:3;width:100%;align-items:stretch;gap:9px}
+    .rail{right:13px;gap:0}
+    .rail-label{display:none}
+    .stage-name{font-size:30px}
+    .top{padding:18px 20px}
+  }
+  @media (max-width:560px){
+    .brand b{font-size:13px;letter-spacing:.24em}
+    .drawer{width:100%}
+    .hud-right .ctl .pill{padding:6px 12px}
+    .scale-line .pow{font-size:22px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .layer.live img{animation:none}
+    .hotspot::after{animation:none}
+  }
+</style>
+</head>
+<body>
+
+<div id="stage" aria-label="尺度场景"></div>
+<div id="void"></div>
+<div id="grain"></div>
+<div id="vignette"></div>
+<div id="hotspots"></div>
+
+<div id="voidLabel">
+  <div class="kicker">跨 越 尺 度</div>
+  <p id="voidText">这里几乎什么都没有</p>
+  <button id="skipBtn">跳到下一站 →</button>
+</div>
+
+<header class="top">
+  <div class="brand"><b>一页纸的宇宙</b><span>POWERS OF TEN</span></div>
+  <div class="top-actions">
+    <button class="ghost-btn" id="helpBtn">快捷键</button>
+    <button class="ghost-btn" id="infoBtn">关于</button>
+  </div>
+</header>
+
+<aside class="rail" id="rail" aria-label="尺度章节"></aside>
+
+<footer class="hud">
+  <div class="hud-left">
+    <div class="scale-line"><span class="pow" id="uPow">10⁻²</span><span class="unit">米</span></div>
+    <div class="fov" id="fovText">画面宽约 3 厘米</div>
+    <h1 class="stage-name" id="stageName">一粒沙</h1>
+  </div>
+
+  <div class="hud-mid">
+    <p class="fact" id="factText"></p>
+    <div class="human" id="humanText"></div>
+  </div>
+
+  <div class="hud-right">
+    <div class="ctl">
+      <button class="pill" id="playBtn">自动播放</button>
+      <button class="pill" id="shareBtn">复制链接</button>
+    </div>
+    <div class="slider-wrap">
+      <input id="slider" type="range" min="-2" max="26.5" step="0.01" value="-2" aria-label="尺度滑杆" />
+      <div class="ticks" id="ticks"></div>
+    </div>
+  </div>
+</footer>
+
+<!-- 详情抽屉 -->
+<section class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <div>
+      <div class="drawer-kicker" id="drawerKicker">01 / 11</div>
+      <h2 class="drawer-title" id="drawerTitle">一粒沙</h2>
+      <div class="drawer-scale" id="drawerScale"></div>
+    </div>
+    <button class="close-x" id="closeDrawer" aria-label="关闭">✕</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+  <div class="drawer-foot">
+    <button class="nav-btn" id="prevStage">← 上一站</button>
+    <button class="nav-btn" id="nextStage">下一站 →</button>
+  </div>
+</section>
+
+<!-- 开场 -->
+<div class="intro" id="intro">
+  <div class="intro-bg"></div>
+  <div class="intro-inner">
+    <div class="kicker">11 个尺度 · 约 45 秒</div>
+    <h1>一页纸的宇宙</h1>
+    <p>从一粒沙出发，一路向后退，直到可观测宇宙的边缘。途中你经过的每一张画面，都是真实拍到的。</p>
+    <button class="start-btn" id="startBtn">开始旅程</button>
+    <div class="intro-hint">滚轮缩放 · <kbd>空格</kbd> 播放 · <kbd>←</kbd><kbd>→</kbd> 逐站</div>
+  </div>
+</div>
+
+<!-- 帮助 -->
+<div class="modal" id="helpModal">
+  <div class="modal-card">
+    <h3>操作方式</h3>
+    <div class="key-row"><span>缩放</span><span>滚轮 / 拖动画面 / <kbd>←</kbd><kbd>→</kbd></span></div>
+    <div class="key-row"><span>快速跨越</span><span><kbd>Shift</kbd> + <kbd>←</kbd><kbd>→</kbd></span></div>
+    <div class="key-row"><span>自动播放</span><span><kbd>空格</kbd></span></div>
+    <div class="key-row"><span>回到开头 / 结尾</span><span><kbd>Home</kbd> / <kbd>End</kbd></span></div>
+    <div class="key-row"><span>打开详情</span><span><kbd>D</kbd></span></div>
+    <div class="key-row"><span>关闭面板</span><span><kbd>Esc</kbd></span></div>
+  </div>
+</div>
+
+<div class="toast" id="toast">链接已复制</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* =========================================================
+     数据：每一站都是一张真实影像
+     fov = 画面纵向覆盖的真实尺度（米）
+     ========================================================= */
+  var STAGES = [
+    {
+      u: -2.0, name: '一粒沙', img: 'assets/img/sand.jpg', pos: '50% 52%', fov: 0.03,
+      fovLabel: '画面宽约 3 厘米',
+      fact: '这张照片里的沙子来自地球——拍下它的，是火星上的相机。',
+      body: '2012 年，好奇号火星车的 MAHLI 显微镜头在地球上拍摄了这份沙样，用来校准对焦。画面里每一颗沙粒都来自不同的岩石：浅色的大多是石英，深色的是玄武岩碎屑，那几颗玻璃般透亮的，是熔岩冷却后的火山玻璃。',
+      credit: 'NASA / JPL-Caltech / MSSS\nCuriosity MAHLI — “Test Image of Earth Sand”',
+      hotspots: [{ x: 63, y: 33, t: '石英颗粒', d: '半透明、发白的颗粒多为石英。它们曾被岩石包裹，风化后被水或风带到海边。' }]
+    },
+    {
+      u: 3.7, name: '沙丘与海岸', img: 'assets/img/dunes.jpg', pos: '48% 50%', fov: 8000,
+      fovLabel: '画面宽约 5 公里',
+      fact: '同一捧沙，把视野扩大一亿倍，就成了纳米布沙漠。',
+      body: '纳米布沙漠是地球上最古老的沙漠，至少已经干旱了 5500 万年。画面左侧那条深色的细线，是大西洋海岸——沙丘一直延伸到海里。',
+      credit: 'NASA / JPL-Caltech / USGS',
+      hotspots: [{ x: 9, y: 72, t: '大西洋海岸', d: '沙丘与海洋之间只隔着几公里。风吹来的沙在这里堆积了数百万年。' }]
+    },
+    {
+      u: 4.8, name: '城市夜色', img: 'assets/img/city.jpg', pos: '50% 55%', fov: 90000,
+      fovLabel: '画面宽约 60 公里',
+      fact: '从这里往下看，城市是一张发光的电路图。',
+      body: '这是国际空间站上的宇航员在夜间拍下的城市。灯光勾勒出的形状是道路、河流与海岸线——人类的活动范围，第一次以光的形态出现在地表。',
+      credit: 'NASA / ISS Expedition 25\nISS025E015176',
+      hotspots: [{ x: 50, y: 52, t: '城市核心', d: '最亮的区域是商业中心；向外延伸的细线，是沿着公路生长的郊区。' }]
+    },
+    {
+      u: 5.7, name: '海岸与群岛', img: 'assets/img/beach.jpg', pos: '50% 52%', fov: 600000,
+      fovLabel: '画面宽约 500 公里',
+      fact: '浅海把阳光反射回来，于是海洋有了层次。',
+      body: '巴哈马群岛周围的浅滩只有几米深，白沙把阳光反射成青绿色；再往外，海底陡然下降，颜色立刻变深。云、海、陆地在这里拼成一幅抽象画。',
+      credit: 'NASA / ISS Expedition 71\nISS071E449837',
+      hotspots: [{ x: 42, y: 55, t: '浅滩', d: '水深不到十米的地方，光几乎全部反射回来，所以呈现明亮的青绿色。' }]
+    },
+    {
+      u: 7.1, name: '地球', img: 'assets/img/earth.jpg', pos: '50% 50%', fov: 1.3e7,
+      fovLabel: '直径约 1.27 万公里',
+      fact: '刚才的一切——沙、城市、海岸——都在这颗蓝点上。',
+      body: '2012 年的“蓝色弹珠”影像，由 Suomi NPP 卫星逐轨拍摄后拼接而成。你看到的每一片云，都是拍摄那一刻真实存在的。',
+      credit: 'NASA Goddard / Suomi NPP\n“Blue Marble 2012”',
+      hotspots: [
+        { x: 44, y: 40, t: '北美大陆', d: '画面中央偏上的是北美。沙漠的褐色、森林的深绿、农田的浅黄，在这里都能分辨。' },
+        { x: 62, y: 52, t: '加勒比海', d: '浅海中的岛屿和珊瑚礁，让海面出现大片青绿色。' }
+      ]
+    },
+    {
+      u: 8.6, name: '地月系统', img: 'assets/img/earthrise.jpg', pos: '50% 55%', fov: 1.2e9,
+      fovLabel: '月地距离约 38 万公里',
+      fact: '阿波罗 17 号的宇航员回头时，看到地球从月平线升起。',
+      body: '1972 年 12 月，人类最后一次登月。这张照片被称为“地球升起”，它改变了很多人看地球的方式——那是我们唯一的家。',
+      credit: 'NASA / Apollo 17\nAS17-152-23272',
+      hotspots: [{ x: 47, y: 60, t: '地球', d: '在这张照片里，地球的直径只占画面的一小部分，却装下了所有人。' }]
+    },
+    {
+      u: 9.2, name: '太阳', img: 'assets/img/sun.jpg', pos: '50% 50%', fov: 3e9,
+      fovLabel: '日面直径约 140 万公里',
+      fact: '太阳每秒把 6 亿吨氢变成氦。',
+      body: '这是 SDO 卫星在 171 埃波段拍下的太阳——那是约 100 万度的日冕发出的光。画面里一条条发亮的弧线，是被磁场拉起的等离子体。',
+      credit: 'NASA / SDO (AIA 171)',
+      hotspots: [{ x: 77, y: 39, t: '活跃区', d: '这些明亮的斑块是磁场强烈活动的区域，太阳耀斑常在这里发生。' }]
+    },
+    {
+      u: 18.8, name: '恒星的世界', img: 'assets/img/stars.jpg', pos: '50% 50%', fov: 6e18,
+      fovLabel: '画面宽约 600 光年',
+      fact: '在这个星团里，挤着大约一千万颗恒星。',
+      body: '欧米伽星团距我们约 1.7 万光年，是银河系里最大的球状星团之一。越靠近中心，恒星越密集——在那里，两颗恒星之间的距离可能只有几个光周。把太阳放进这样一个星团，夜空会亮得看不见黑暗。',
+      credit: 'NASA / JPL-Caltech\nOmega Centauri (PIA13125)',
+      hotspots: [{ x: 50, y: 50, t: '星团核心', d: '越靠近中心，恒星越密集。在那里，恒星之间的距离可能只有几个光周。' }]
+    },
+    {
+      u: 21.0, name: '银河系', img: 'assets/img/milkyway.jpg', pos: '50% 50%', fov: 1e22,
+      fovLabel: '直径约 10 万光年',
+      fact: '太阳在猎户臂上，绕银心一圈要 2.3 亿年。',
+      body: '这是一幅根据观测数据绘制的银河系想象图。我们从内部只能看到它的一条光带，但这些数据告诉我们：它有一条棒状的核心，和四条主要旋臂。',
+      credit: 'NASA / JPL-Caltech\nArtist concept (PIA10748)',
+      hotspots: [{ x: 50, y: 50, t: '银心', d: '银河系中心有一个约 400 万倍太阳质量的黑洞——人马座 A*。' }]
+    },
+    {
+      u: 24.0, name: '宇宙网', img: 'assets/img/cluster.jpg', pos: '50% 50%', fov: 3e25,
+      fovLabel: '约 1 亿光年',
+      fact: '星系不是均匀分布的，它们沿着纤维聚成一团。',
+      body: '这是一个真实的星系团，距离我们约 22 亿光年。画面里那些被拉长的弧线，是更遥远星系的光被前景引力扭曲后的样子——爱因斯坦环。',
+      credit: 'NASA / ESA / STScI\nGalaxy cluster (PIA10237)',
+      hotspots: [{ x: 52, y: 48, t: '引力透镜', d: '前景星系团的引力弯曲了背景星系的光，于是我们看到被拉成弧线的影像。' }]
+    },
+    {
+      u: 26.5, name: '可观测宇宙', img: 'assets/img/deepfield.jpg', pos: '50% 50%', fov: 8e26,
+      fovLabel: '直径约 930 亿光年',
+      fact: '这张照片里，几乎每一个光点都是一个星系。',
+      body: '哈勃深场：望远镜对准天空中一块很小的暗区，曝光了十几天。结果里面出现了数千个星系，每一个都有自己的恒星、行星，或许还有别的东西。',
+      credit: 'NASA / ESA / STScI\nHubble Deep Field (PIA12110)',
+      hotspots: [{ x: 50, y: 46, t: '星系', d: '画面中每一个模糊的光斑都包含数百亿颗恒星。你看到的，是它们几亿年前的样子。' }]
+    }
+  ];
+
+  var MIN_U = STAGES[0].u, MAX_U = STAGES[STAGES.length - 1].u;
+
+  /* 大跨度之间显示的文字（键为起点站的序号） */
+  var VOID_LINES = {
+    0: '从厘米，到公里',
+    6: '最近的恒星，也在 4.2 光年之外',
+    8: '星系之间，是数千万光年的虚空'
+  };
+
+  /* ========================================================= */
+  var stageEl = document.getElementById('stage');
+  var voidEl = document.getElementById('void');
+  var voidLabel = document.getElementById('voidLabel');
+  var voidText = document.getElementById('voidText');
+  var skipBtn = document.getElementById('skipBtn');
+  var slider = document.getElementById('slider');
+  var uPow = document.getElementById('uPow');
+  var fovText = document.getElementById('fovText');
+  var stageName = document.getElementById('stageName');
+  var factText = document.getElementById('factText');
+  var humanText = document.getElementById('humanText');
+  var railEl = document.getElementById('rail');
+  var ticksEl = document.getElementById('ticks');
+  var hotspotsEl = document.getElementById('hotspots');
+  var playBtn = document.getElementById('playBtn');
+  var toast = document.getElementById('toast');
+
+  var clamp = function (v, a, b) { return v < a ? a : v > b ? b : v; };
+  function smooth(a, b, x) {
+    var t = clamp((x - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+  var SUP = { '-': '⁻', '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' };
+  function sup(n) { return String(n).split('').map(function (c) { return SUP[c] || c; }).join(''); }
+  function fmtNum(v) {
+    if (v >= 1e12) return (v / 1e12).toFixed(1).replace(/\.0$/, '') + ' 万亿';
+    if (v >= 1e8) return (v / 1e8).toFixed(1).replace(/\.0$/, '') + ' 亿';
+    if (v >= 1e4) return (v / 1e4).toFixed(1).replace(/\.0$/, '') + ' 万';
+    return Math.round(v).toString();
+  }
+
+  /* ---------- 建立图层 ---------- */
+  var layers = STAGES.map(function (s, i) {
+    var d = document.createElement('div');
+    d.className = 'layer';
+    var img = document.createElement('img');
+    img.src = s.img;
+    img.alt = s.name;
+    img.style.objectPosition = s.pos;
+    img.decoding = 'async';
+    d.appendChild(img);
+    stageEl.appendChild(d);
+    return d;
+  });
+
+  /* ---------- 章节栏 / 刻度 ---------- */
+  STAGES.forEach(function (s, i) {
+    var item = document.createElement('button');
+    item.className = 'rail-item';
+    item.innerHTML = '<span class="rail-label">' + s.name + '</span><span class="rail-dot"></span>';
+    item.addEventListener('click', function () { stopPlay(); animateTo(s.u); });
+    railEl.appendChild(item);
+
+    var t = document.createElement('span');
+    t.className = 'tick';
+    t.style.left = ((s.u - MIN_U) / (MAX_U - MIN_U) * 100) + '%';
+    t.title = s.name;
+    t.addEventListener('click', function () { stopPlay(); animateTo(s.u); });
+    ticksEl.appendChild(t);
+  });
+
+  var railItems = railEl.children;
+  var tickEls = ticksEl.children;
+
+  /* ---------- 状态 ---------- */
+  var u = MIN_U;
+  var active = 0;
+  var factTimer = null;
+  var playing = false, rafId = null, playT0 = 0, playFrom = 0, lastTs = 0, voidNow = 0;
+  var dragY = null, dragStartU = 0;
+  var pointers = {};
+
+  /* ---------- 渲染 ---------- */
+  function render() {
+    var best = 0, bestOp = -1;
+
+    for (var i = 0; i < STAGES.length; i++) {
+      var s = STAGES[i];
+      var prevMid = i > 0 ? (STAGES[i - 1].u + s.u) / 2 : s.u - 4;
+      var nextMid = i < STAGES.length - 1 ? (s.u + STAGES[i + 1].u) / 2 : s.u + 4;
+      var W = i === 0 || i === STAGES.length - 1 ? 0.5 : 0.38;
+      var o = smooth(prevMid - W, prevMid + W, u) * (1 - smooth(nextMid - W, nextMid + W, u));
+      o = clamp(o, 0, 1);
+
+      var el = layers[i];
+      if (o < 0.004) {
+        if (el.style.visibility !== 'hidden') el.style.visibility = 'hidden';
+        el.classList.remove('live');
+        continue;
+      }
+      el.style.visibility = 'visible';
+      el.style.opacity = o.toFixed(3);
+      var span = i === 0 ? 3 : s.u - STAGES[i - 1].u;
+      var sc = clamp(1 - 0.05 * (u - s.u) / Math.max(0.8, span), 0.94, 1.06);
+      el.style.transform = 'scale(' + sc.toFixed(4) + ')';
+      if (o > 0.55) el.classList.add('live'); else el.classList.remove('live');
+      if (o > bestOp) { bestOp = o; best = i; }
+    }
+
+    /* 大跨度之间的黑场 */
+    var v = 0, vg = -1;
+    for (var g = 0; g < STAGES.length - 1; g++) {
+      var gap = STAGES[g + 1].u - STAGES[g].u;
+      if (gap < 2.8) continue;
+      var mid = (STAGES[g].u + STAGES[g + 1].u) / 2;
+      var half = Math.min(1.1, gap * 0.17);
+      var d = Math.abs(u - mid) / half;
+      if (d < 1) {
+        var val = (1 - d * d) * Math.min(0.92, (gap - 1.6) / 4);
+        if (val > v) { v = val; vg = g; }
+      }
+    }
+    voidNow = v;
+    voidEl.style.opacity = v.toFixed(3);
+    voidLabel.style.opacity = v > 0.45 ? ((v - 0.45) / 0.55).toFixed(2) : '0';
+    hotspotsEl.style.opacity = clamp(1 - v * 1.6, 0, 1).toFixed(2);
+    if (vg >= 0) {
+      var line = VOID_LINES[vg];
+      if (line && voidText.textContent !== line) voidText.textContent = line;
+    }
+
+    /* 文案 */
+    if (best !== active) {
+      active = best;
+      updateStageUI();
+      updateHotspots();
+    }
+
+    var s2 = STAGES[active];
+    var e = Math.floor(s2.u), mant = Math.pow(10, s2.u - e);
+    uPow.textContent = (mant > 1.05 ? mant.toFixed(1) + ' × 10' + sup(e) : '10' + sup(e));
+    slider.value = u;
+    if (!playing) {
+      var label = u >= MAX_U - 0.01 ? '重新播放' : '自动播放';
+      if (playBtn.textContent !== label) playBtn.textContent = label;
+    }
+    updateRailProgress();
+  }
+
+  function updateStageUI() {
+    var s = STAGES[active];
+    stageName.textContent = s.name;
+    fovText.textContent = s.fovLabel;
+    humanText.textContent = humanLine(s);
+    factText.style.opacity = '0';
+    if (factTimer) clearTimeout(factTimer);
+    var idx = active;
+    factTimer = setTimeout(function () {
+      factText.textContent = STAGES[idx].fact;
+      factText.style.opacity = '1';
+    }, 200);
+    if (drawer.classList.contains('open') && drawerMode === 'stage') fillDrawer(active);
+  }
+
+  function humanLine(s) {
+    var H = window.innerHeight || 900;
+    var px = 1.7 / s.fov * H;
+    if (px > H * 1.2) return '一个 1.7 米的人，比这个画面还高 ' + fmtNum(px / H) + ' 倍';
+    if (px >= 2) return '一个 1.7 米的人，在这个画面里约 ' + fmtNum(px) + ' 像素高';
+    if (px >= 0.02) return '一个 1.7 米的人，在这个画面里只有 ' + px.toFixed(2) + ' 像素';
+    if (1 / px > 1e11) return '在这个尺度上，一个人已经小到没有意义';
+    return '把画面放大 ' + fmtNum(1 / px) + ' 倍，一个人才占满 1 像素';
+  }
+
+  function updateRailProgress() {
+    for (var i = 0; i < railItems.length; i++) {
+      railItems[i].className = 'rail-item' + (i === active ? ' active' : (i < active ? ' done' : ''));
+      tickEls[i].className = 'tick' + (i === active ? ' active' : '');
+    }
+  }
+
+  /* ---------- 热点 ---------- */
+  var hotspotBtns = [];
+  function updateHotspots() {
+    hotspotsEl.innerHTML = '';
+    hotspotBtns = [];
+    var s = STAGES[active];
+    if (!s.hotspots) return;
+    s.hotspots.forEach(function (h) {
+      var b = document.createElement('button');
+      b.className = 'hotspot';
+      b.style.left = h.x + '%';
+      b.style.top = h.y + '%';
+      b.innerHTML = '<span class="hotspot-hint">' + h.t + '</span>';
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
+        openDrawer(active, h);
+      });
+      hotspotsEl.appendChild(b);
+      hotspotBtns.push(b);
+    });
+  }
+
+  /* ---------- 字体/尺寸缓存 ---------- */
+  function setU(v, fromUser) {
+    if (fromUser) { /* 用户操作时保持 UI 同步 */ }
+    u = clamp(v, MIN_U, MAX_U);
+    render();
+  }
+
+  /* ---------- 播放 ---------- */
+  function step(ts) {
+    if (!playing) return;
+    if (!lastTs) lastTs = ts;
+    var dt = Math.min(ts - lastTs, 400) / 1000;
+    lastTs = ts;
+    /* 空白尺度加速通过，避免长时间黑场 */
+    var speed = 0.62 * (voidNow > 0.3 ? 2.4 : 1);
+    var nu = u + dt * speed;
+    if (nu >= MAX_U) { setU(MAX_U); stopPlay(); return; }
+    setU(nu);
+    rafId = requestAnimationFrame(step);
+  }
+  function startPlay() {
+    if (u >= MAX_U - 0.01) setU(MIN_U);
+    playing = true; playT0 = 0; playFrom = u; lastTs = 0;
+    playBtn.classList.add('on');
+    playBtn.textContent = '暂停';
+    closeDrawer();
+    rafId = requestAnimationFrame(step);
+  }
+  function stopPlay() {
+    playing = false;
+    playBtn.classList.remove('on');
+    playBtn.textContent = u >= MAX_U - 0.01 ? '重新播放' : '自动播放';
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+  playBtn.addEventListener('click', function () { playing ? stopPlay() : startPlay(); });
+
+  /* ---------- 动画到某一站 ---------- */
+  function animateTo(target) {
+    var from = u, dist = target - from;
+    if (Math.abs(dist) < 0.01) return;
+    var dur = Math.min(2200, 500 + Math.abs(dist) * 55);
+    var t0 = null;
+    if (rafId) cancelAnimationFrame(rafId);
+    playing = false;
+    playBtn.classList.remove('on');
+    playBtn.textContent = '自动播放';
+    function tick(ts) {
+      if (t0 === null) t0 = ts;
+      var p = Math.min(1, (ts - t0) / dur);
+      var e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+      setU(from + dist * e);
+      if (p < 1) rafId = requestAnimationFrame(tick);
+      else rafId = null;
+    }
+    rafId = requestAnimationFrame(tick);
+  }
+  skipBtn.addEventListener('click', function () {
+    var i = active + 1;
+    while (i < STAGES.length - 1 && STAGES[i].u < u) i++;
+    animateTo(STAGES[Math.min(i, STAGES.length - 1)].u);
+  });
+
+  /* ---------- 滑杆 ---------- */
+  slider.addEventListener('input', function () {
+    stopPlay();
+    setU(parseFloat(slider.value));
+  });
+
+  /* ---------- 滚轮（带惯性） ---------- */
+  var vel = 0, velRaf = null;
+  function velLoop() {
+    if (Math.abs(vel) < 0.0008) { vel = 0; velRaf = null; return; }
+    setU(u + vel);
+    vel *= 0.9;
+    velRaf = requestAnimationFrame(velLoop);
+  }
+  window.addEventListener('wheel', function (e) {
+    if (drawer && drawer.contains(e.target)) return;   /* 抽屉内正常滚动 */
+    e.preventDefault();
+    if (playing) stopPlay();
+    var d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    vel = clamp(vel + d * 0.0011, -0.5, 0.5);
+    if (!velRaf) velRaf = requestAnimationFrame(velLoop);
+  }, { passive: false });
+
+  /* ---------- 拖动 ---------- */
+  stageEl.addEventListener('pointerdown', function (e) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    if (Object.keys(pointers).length === 1) {
+      dragY = e.clientY;
+      dragStartU = u;
+      stageEl.classList.add('dragging');
+      if (playing) stopPlay();
+      try { stageEl.setPointerCapture(e.pointerId); } catch (err) {}
+    }
+  });
+  stageEl.addEventListener('pointermove', function (e) {
+    if (!pointers[e.pointerId]) return;
+    var prev = pointers[e.pointerId];
+    pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    var ids = Object.keys(pointers);
+    if (ids.length >= 2) {
+      var p1 = pointers[ids[0]], p2 = pointers[ids[1]];
+      var dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+      if (lastPinch) {
+        var ratio = dist / lastPinch;
+        setU(u + Math.log10(ratio) * 6);
+      }
+      lastPinch = dist;
+      return;
+    }
+    if (dragY !== null) {
+      var dy = dragY - e.clientY;
+      dragY = e.clientY;
+      setU(u + dy * 0.006);
+    }
+  });
+  var lastPinch = 0;
+  function endPointer(e) {
+    delete pointers[e.pointerId];
+    if (Object.keys(pointers).length < 2) lastPinch = 0;
+    if (Object.keys(pointers).length === 0) { dragY = null; stageEl.classList.remove('dragging'); }
+  }
+  stageEl.addEventListener('pointerup', endPointer);
+  stageEl.addEventListener('pointercancel', endPointer);
+
+  /* ---------- 键盘 ---------- */
+  window.addEventListener('keydown', function (e) {
+    if (e.target && /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+    var stepSize = e.shiftKey ? 1.6 : 0.14;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+      e.preventDefault(); stopPlay(); closeDrawer(); setU(u + stepSize);
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+      e.preventDefault(); stopPlay(); closeDrawer(); setU(u - stepSize);
+    } else if (e.key === 'Home') { e.preventDefault(); animateTo(MIN_U); }
+    else if (e.key === 'End') { e.preventDefault(); animateTo(MAX_U); }
+    else if (e.key === ' ') { e.preventDefault(); playing ? stopPlay() : startPlay(); }
+    else if (e.key === 'Escape') { closeDrawer(); helpModal.classList.remove('open'); }
+    else if (e.key === 'd' || e.key === 'D') { openDrawer(active, null); }
+  });
+
+  /* ---------- 抽屉 ---------- */
+  var drawer = document.getElementById('drawer');
+  var drawerKicker = document.getElementById('drawerKicker');
+  var drawerTitle = document.getElementById('drawerTitle');
+  var drawerScale = document.getElementById('drawerScale');
+  var drawerBody = document.getElementById('drawerBody');
+  var currentHotspot = null;
+  var drawerMode = 'stage';
+
+  function fillDrawer(idx, hotspot) {
+    var s = STAGES[idx];
+    drawerKicker.textContent = String(idx + 1).padStart(2, '0') + ' / ' + String(STAGES.length).padStart(2, '0');
+    drawerTitle.textContent = hotspot ? hotspot.t : s.name;
+    drawerScale.textContent = '10' + sup(Math.floor(s.u)) + ' 米 · ' + s.fovLabel;
+    var html = '';
+    if (hotspot) {
+      html += '<p>' + hotspot.d + '</p>';
+      html += '<h4>所在尺度</h4><p>' + s.fact + '</p>';
+    } else {
+      html += '<p>' + s.body + '</p>';
+      html += '<h4>这一帧</h4><p>' + s.fact + '</p>';
+      if (s.hotspots && s.hotspots.length) {
+        html += '<h4>画面中的细节</h4><p>' + s.hotspots.map(function (h) { return '· ' + h.t; }).join('<br>') + '</p>';
+      }
+    }
+    html += '<h4>影像来源</h4><div class="credit">' + (s.credit || '').replace(/\n/g, '<br>') + '</div>';
+    drawerBody.innerHTML = html;
+    drawerBody.scrollTop = 0;
+    var prev = document.getElementById('prevStage');
+    var next = document.getElementById('nextStage');
+    prev.disabled = idx === 0;
+    next.disabled = idx === STAGES.length - 1;
+    prev.onclick = function () { closeDrawer(); animateTo(STAGES[idx - 1].u); };
+    next.onclick = function () { closeDrawer(); animateTo(STAGES[idx + 1].u); };
+  }
+  function openDrawer(idx, hotspot) {
+    currentHotspot = hotspot;
+    drawerMode = 'stage';
+    fillDrawer(idx, hotspot);
+    drawer.classList.add('open');
+    drawer.setAttribute('aria-hidden', 'false');
+  }
+  function openAbout() {
+    drawerMode = 'about';
+    drawerKicker.textContent = 'ABOUT';
+    drawerTitle.textContent = '一页纸的宇宙';
+    drawerScale.textContent = '11 个尺度 · 28 个数量级';
+    drawerBody.innerHTML =
+      '<p>这是一个关于尺度的装置：一根滑杆，11 站，从 1 厘米走到 930 亿光年。每一站都对应一张真实拍到的影像，而不是插画。</p>' +
+      '<h4>怎么用</h4><p>滚轮或拖动画面缩放；点右侧圆点直接跳站；点画面里的小圆点，可以看到那一处的细节。画面下方的细线，表示“一个 1.7 米的人”在这个尺度下有多大。</p>' +
+      '<h4>影像来源</h4><div class="credit">NASA / JPL-Caltech / MSSS · Curiosity MAHLI<br>' +
+      'NASA / JPL-Caltech / USGS · Namib Desert<br>NASA / ISS Expedition 25 &amp; 71<br>' +
+      'NASA Goddard / Suomi NPP · Blue Marble 2012<br>NASA / Apollo 17 · AS17-152-23272<br>' +
+      'NASA / SDO (AIA 171)<br>NASA / JPL-Caltech · Omega Centauri (PIA13125)<br>' +
+      'NASA / JPL-Caltech · Milky Way artist concept (PIA10748)<br>' +
+      'NASA / ESA / STScI · Galaxy cluster (PIA10237)<br>NASA / ESA / STScI · Hubble Deep Field (PIA12110)</div>' +
+      '<h4>说明</h4><p>NASA 影像多数为公有领域；个别为艺术家想象图，已在对应站点注明。尺度与距离为科普性近似值。</p>';
+    drawerBody.scrollTop = 0;
+    document.getElementById('prevStage').disabled = true;
+    document.getElementById('nextStage').disabled = true;
+    drawer.classList.add('open');
+    drawer.setAttribute('aria-hidden', 'false');
+  }
+  function closeDrawer() {
+    drawer.classList.remove('open');
+    drawer.setAttribute('aria-hidden', 'true');
+  }
+  function closeDrawerIfOpen() {
+    if (drawer.classList.contains('open')) { closeDrawer(); return true; }
+    return false;
+  }
+  document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
+  document.getElementById('infoBtn').addEventListener('click', openAbout);
+
+  /* ---------- 开场 / 帮助 ---------- */
+  var intro = document.getElementById('intro');
+  document.getElementById('startBtn').addEventListener('click', function () {
+    intro.classList.add('hide');
+    animateTo(STAGES[0].u + 0.001);
+    setTimeout(function () { intro.style.display = 'none'; }, 1000);
+  });
+
+  var helpModal = document.getElementById('helpModal');
+  document.getElementById('helpBtn').addEventListener('click', function () {
+    helpModal.classList.add('open');
+  });
+  helpModal.addEventListener('click', function (e) {
+    if (e.target === helpModal) helpModal.classList.remove('open');
+  });
+
+  /* ---------- 分享 ---------- */
+  var shareBtn = document.getElementById('shareBtn');
+  shareBtn.addEventListener('click', function () {
+    var link = location.href.split('#')[0] + '#u=' + u.toFixed(2);
+    var done = function () { showToast('链接已复制，可分享这个尺度'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(done, function () { fallbackCopy(link); });
+    } else fallbackCopy(link);
+  });
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); showToast('链接已复制'); } catch (e) { showToast(text); }
+    document.body.removeChild(ta);
+  }
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(function () { toast.classList.remove('show'); }, 2200);
+  }
+
+  function readHash() {
+    var m = location.hash.match(/u=([\d.]+)/);
+    if (m) {
+      var v = parseFloat(m[1]);
+      if (!isNaN(v)) return clamp(v, MIN_U, MAX_U);
+    }
+    return null;
+  }
+
+  /* ---------- 启动 ---------- */
+  var startU = readHash();
+  if (startU !== null) {
+    intro.style.display = 'none';
+    setU(startU);
+  } else {
+    setU(MIN_U);
+  }
+  updateStageUI();
+  updateHotspots();
+  window.addEventListener('resize', function () { render(); });
+})();
+</script>
+</body>
+</html>
+
+
