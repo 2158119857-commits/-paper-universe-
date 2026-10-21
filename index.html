@@ -390,6 +390,12 @@
   .key-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(238,235,228,.06);font-size:12.5px;color:var(--muted)}
   .key-row kbd{font-family:var(--mono);font-size:11px;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 7px}
 
+  #loader{
+    position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:26;
+    font-size:11.5px;letter-spacing:.26em;color:var(--muted);
+    opacity:0;transition:opacity .35s;pointer-events:none;
+  }
+
   .toast{
     position:fixed;left:50%;bottom:110px;transform:translate(-50%,10px);z-index:80;
     background:rgba(216,185,140,.94);color:#191209;font-size:12px;letter-spacing:.08em;
@@ -526,6 +532,7 @@
   </div>
 </div>
 
+<div id="loader">载入影像…</div>
 <div class="toast" id="toast">链接已复制</div>
 
 <script>
@@ -682,6 +689,7 @@
   var voidText = document.getElementById('voidText');
   var skipBtn = document.getElementById('skipBtn');
   var slider = document.getElementById('slider');
+  var loaderEl = document.getElementById('loader');
   var uPow = document.getElementById('uPow');
   var fovText = document.getElementById('fovText');
   var stageName = document.getElementById('stageName');
@@ -1133,7 +1141,7 @@
     var img = new Image();
     img.onload = function () {
       if (!GL_OK) return;
-      var maxW = 2048, w = img.width, h = img.height;
+      var maxW = window.innerWidth < 760 ? 1024 : 2048, w = img.width, h = img.height;
       if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
       var c = document.createElement('canvas');
       c.width = w; c.height = h;
@@ -1155,18 +1163,30 @@
     img.src = url;
   }
   var planetTex = {};
+  var earthTexStarted = false, planetTexStarted = false;
+
+  function ensureEarthTex() {
+    if (earthTexStarted || !GL_OK) return;
+    earthTexStarted = true;
+    loadTexTo('assets/img/earth-day.jpg', texEarthDay);
+    loadTexTo('assets/img/earth-night.jpg', texEarthNight);
+    loadTexTo('assets/img/moon.jpg', texMoon);
+  }
+  function ensurePlanetTex() {
+    if (planetTexStarted || !GL_OK) return;
+    planetTexStarted = true;
+    ['mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'saturnring'].forEach(function (k) {
+      loadTexTo('assets/img/planets/' + k + '.jpg', planetTex[k]);
+    });
+  }
+
   if (GL_OK) {
     texEarthDay = solidTex(22, 56, 100);
     texEarthNight = solidTex(6, 9, 16);
     texMoon = solidTex(120, 118, 112);
     texBlack = solidTex(0, 0, 0);
-    loadTexTo('assets/img/earth-day.jpg', texEarthDay);
-    loadTexTo('assets/img/earth-night.jpg', texEarthNight);
-    loadTexTo('assets/img/moon.jpg', texMoon);
-
     ['mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'saturnring'].forEach(function (k) {
       planetTex[k] = solidTex(90, 84, 78);
-      loadTexTo('assets/img/planets/' + k + '.jpg', planetTex[k]);
     });
     planetTex.earth = texEarthDay;
     planetTex.moon = texMoon;
@@ -1174,15 +1194,23 @@
 
   /* 每一站的纹理与尺寸 */
   var planes = STAGES.map(function (s, i) {
-    return { tex: null, opacity: 0, aspect: 1, posX: 0.5, posY: 0.5, ready: false };
-  });
-  STAGES.forEach(function (s, i) {
     var m = /([\d.]+)%\s+([\d.]+)%/.exec(s.pos || '50% 50%');
-    if (m) { planes[i].posX = parseFloat(m[1]) / 100; planes[i].posY = parseFloat(m[2]) / 100; }
+    return {
+      tex: null, opacity: 0, aspect: 1, ready: false, started: false,
+      posX: m ? parseFloat(m[1]) / 100 : 0.5,
+      posY: m ? parseFloat(m[2]) / 100 : 0.5
+    };
+  });
+
+  function loadPlane(i) {
+    var pl = planes[i];
+    if (pl.started || !GL_OK) return;
+    pl.started = true;
     var img = new Image();
     img.onload = function () {
       if (!GL_OK) return;
-      var maxW = 1600, w = img.width, h = img.height;
+      var maxW = window.innerWidth < 760 ? 1024 : 1600;
+      var w = img.width, h = img.height;
       if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
       var c = document.createElement('canvas');
       c.width = w; c.height = h;
@@ -1205,8 +1233,14 @@
       planes[i].ready = true;
       drawScene();
     };
-    img.src = s.img;
-  });
+    img.src = STAGES[i].img;
+  }
+
+  /* 只加载当前站前后两站，避免一次性拉满 6.5 MB */
+  function ensurePlanes() {
+    var lo = Math.max(0, active - 2), hi = Math.min(STAGES.length - 1, active + 2);
+    for (var k = lo; k <= hi; k++) loadPlane(k);
+  }
 
   /* 3D 参数 */
   var D = 10;
@@ -1384,6 +1418,13 @@
 
     /* 6. 银河系模式 */
     if (galaxyMix > 0.002) drawGalaxy(galaxyMix * (1 - 0.8 * Math.sin(Math.PI * galaxyMix)));
+
+    /* 载入提示 */
+    if (loaderEl) {
+      var showLd = !(earthMode || solarMode || galaxyMode) && !(planes[active] && planes[active].ready);
+      var lv = showLd ? '1' : '0';
+      if (loaderEl.style.opacity !== lv) loaderEl.style.opacity = lv;
+    }
 
     /* 热点跟着图像平面走 */
     syncHotspots();
@@ -1911,6 +1952,7 @@
   }
 
   function updateStageUI() {
+    ensurePlanes();
     var s = STAGES[active];
     stageName.textContent = s.name;
     fovText.textContent = s.fovLabel;
@@ -2281,6 +2323,7 @@
 
   function enterEarth() {
     if (earthMode || !GL_OK) return;
+    ensureEarthTex();
     earthMode = true;
     earthTarget = 1;
     orbit.theta = 0.55; orbit.tTheta = 0.9;
@@ -2303,6 +2346,7 @@
 
   function enterSolar() {
     if (solarMode || !GL_OK) return;
+    ensurePlanetTex();
     solarMode = true;
     solarTargetMix = 1;
     solarCam.focus = null;
