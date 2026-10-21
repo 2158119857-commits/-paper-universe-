@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
@@ -760,9 +760,15 @@
      于是每张照片都能跟着指针做轻微的分层位移，变成一张“活的照片”。 */
   var STAGE_LIFE = [0.35, 0.55, 1.0, 0.6, 0.35, 0.32, 0.7, 1.0, 0.85, 0.7, 0.95];
   var STAGE_DEPTH = [1.0, 1.35, 1.1, 1.25, 0.85, 1.0, 0.6, 0.85, 0.8, 0.7, 0.5];
+  /* 顶点抬升幅度（相对画面高度）：沙丘/沙粒起伏大，星空几乎是平的 */
+  var STAGE_DISP = [0.12, 0.15, 0.07, 0.12, 0.05, 0.08, 0.03, 0.05, 0.04, 0.04, 0.03];
+  /* 深度图起伏的环境光遮蔽强度：地形/沙粒明显，星空几乎没有 */
+  var STAGE_AO = [12, 16, 10, 14, 6, 8, 3, 4, 4, 4, 3];
   for (var _si = 0; _si < STAGES.length; _si++) {
     STAGES[_si].life = STAGE_LIFE[_si];
     STAGES[_si].depthK = STAGE_DEPTH[_si];
+    STAGES[_si].disp = STAGE_DISP[_si];
+    STAGES[_si].ao = STAGE_AO[_si];
     STAGES[_si].depth = STAGES[_si].img.replace('/img/', '/depth/').replace(/\.(jpg|png)$/i, '.jpg');
   }
 
@@ -947,6 +953,8 @@
            canvas.getContext('webgl', { antialias: true, alpha: false }) ||
            canvas.getContext('experimental-webgl', { antialias: true, alpha: false });
   var isGL2 = !!(gl && window.WebGL2RenderingContext && gl instanceof WebGL2RenderingContext);
+  /* 顶点着色器能否采样贴图：决定能不能把影像抬成真正的三维曲面 */
+  var hasVertexTex = !!(gl && gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) > 0);
 
   if (!gl) {
     GL_OK = false;
@@ -958,6 +966,7 @@
   }
 
   var VERT_QUAD = [
+    'precision mediump float;',
     'attribute vec2 aP;',
     'uniform mat4 uProj;',
     'uniform mat4 uView;',
@@ -965,11 +974,23 @@
     'uniform vec2 uSize;',
     'uniform vec2 uUvScale;',
     'uniform vec2 uUvOffset;',
+    'uniform sampler2D uDepth;',
+    'uniform float uDisp;',
+    'uniform float uNoDepth;',
+    'uniform vec2 uRot;',
     'varying vec2 vUv;',
     'void main(){',
-    '  vec3 p = vec3(uPos.xy + aP * uSize * 0.5, uPos.z);',
     '  vUv = (vec2(aP.x * 0.5 + 0.5, 0.5 - aP.y * 0.5)) * uUvScale + uUvOffset;',
-    '  gl_Position = uProj * uView * vec4(p, 1.0);',
+    /* 顶点按深度图抬起：近处离镜头更近，整张照片变成一张有起伏的曲面 */
+    '  float d = texture2D(uDepth, vUv).r;',
+    '  float z = (d - 0.5) * uDisp * (1.0 - uNoDepth);',
+    '  vec3 p = vec3(aP * uSize * 0.5, z);',
+    /* 指针带着这张曲片轻微旋转，于是视差是真的看得见侧面 */
+    '  float cy = cos(uRot.y), sy = sin(uRot.y);',
+    '  vec3 q = vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);',
+    '  float cx = cos(uRot.x), sx = sin(uRot.x);',
+    '  q = vec3(q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx);',
+    '  gl_Position = uProj * uView * vec4(uPos + q, 1.0);',
     '}'
   ].join('\n');
 
@@ -984,10 +1005,16 @@
     'uniform float uTime;',
     'uniform float uLife;',
     'uniform float uNoDepth;',
+    'uniform float uAO;',
     'void main(){',
     /* 单张照片的深度视差：越近的地方跟手位移越大 */
     '  float d = texture2D(uDepth, vUv).r;',
     '  vec2 uv = vUv + uPar * (d - 0.5) * uDepthK * (1.0 - uNoDepth);',
+    /* 用深度图的局部起伏做一点点环境光遮蔽：凹陷处暗下去，表面才有实体感 */
+    '  float e = 0.0035;',
+    '  float av = (texture2D(uDepth, vUv + vec2(e, 0.0)).r + texture2D(uDepth, vUv - vec2(e, 0.0)).r' +
+    '           + texture2D(uDepth, vUv + vec2(0.0, e)).r + texture2D(uDepth, vUv - vec2(0.0, e)).r) * 0.25;',
+    '  float ao = clamp(1.0 - (av - d) * uAO, 0.55, 1.0);',
     /* 极慢的呼吸，静止时画面也在活着 */
     '  float t = uTime;',
     '  uv += vec2(sin(t * 0.11 + vUv.y * 0.7), cos(t * 0.09 + vUv.x * 0.6)) * 0.0018 * uLife;',
@@ -998,6 +1025,7 @@
     '  float tw2 = sin(t * 0.83 + vUv.x * 53.0 - vUv.y * 71.0) * 0.5 + 0.5;',
     '  float sparkle = (tw * 0.62 + tw2 * 0.38 - 0.52) * smoothstep(0.34, 0.92, lum);',
     '  c *= 1.0 + sparkle * 0.12 * uLife;',
+    '  c *= ao;',
     /* 边缘压暗一点点，镜头味 */
     '  vec2 q = vUv - 0.5;',
     '  c *= 1.0 - dot(q, q) * 0.10;',
@@ -1213,7 +1241,7 @@
   }
 
   var progQ = null, progP = null, progS = null, progSun = null, progLine = null, progRing = null, progCloud = null;
-  var quadBuf, starBuf, dustBuf, sphereGeo = null, ringGeo = null, orbitGeo = [], blackTex = null;
+  var quadBuf, gridBuf = null, gridIdx = null, gridCount = 0, starBuf, dustBuf, sphereGeo = null, ringGeo = null, orbitGeo = [], blackTex = null;
   var uQ = {}, uP = {}, uS = {}, uSunP = {}, uLine = {}, uRing = {}, uC = {};
 
   if (GL_OK) {
@@ -1234,7 +1262,10 @@
       depthK: gl.getUniformLocation(progQ, 'uDepthK'),
       time: gl.getUniformLocation(progQ, 'uTime'),
       life: gl.getUniformLocation(progQ, 'uLife'),
-      noDepth: gl.getUniformLocation(progQ, 'uNoDepth')
+      noDepth: gl.getUniformLocation(progQ, 'uNoDepth'),
+      ao: gl.getUniformLocation(progQ, 'uAO'),
+      disp: gl.getUniformLocation(progQ, 'uDisp'),
+      rot: gl.getUniformLocation(progQ, 'uRot')
     };
     uP = {
       proj: gl.getUniformLocation(progP, 'uProj'),
@@ -1276,6 +1307,27 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    /* 影像网格：够密，被深度图抬起时才不显棱角 */
+    (function buildGrid() {
+      var nx = 96, ny = 54, verts = [], idx = [], x, y;
+      for (y = 0; y <= ny; y++) {
+        for (x = 0; x <= nx; x++) verts.push(x / nx * 2 - 1, y / ny * 2 - 1);
+      }
+      for (y = 0; y < ny; y++) {
+        for (x = 0; x < nx; x++) {
+          var a = y * (nx + 1) + x, b = a + 1, c = a + nx + 1, d = c + 1;
+          idx.push(a, c, b, b, c, d);
+        }
+      }
+      gridBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, gridBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
+      gridIdx = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gridIdx);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+      gridCount = idx.length;
+    })();
 
     /* 球体几何 */
     function buildSphere(seg, rings) {
@@ -1573,6 +1625,7 @@
   var camX = 0, camY = 0, camTX = 0, camTY = 0, camRaf = null;
   /* 活的照片：连续时间 + 指针视差 */
   var lifeTime = 0, parX = 0, parY = 0, parTX = 0, parTY = 0, lastParX = 0, lastParY = 0;
+  var lastRotX = 0, lastRotY = 0;
   window.addEventListener('pointermove', function (e) {
     parTX = (e.clientX / window.innerWidth - 0.5) * 2;
     parTY = (e.clientY / window.innerHeight - 0.5) * 2;
@@ -1696,10 +1749,10 @@
 
     /* 2. 影像平面 */
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.DEPTH_TEST);
     gl.useProgram(progQ);
     gl.uniformMatrix4fv(uQ.proj, false, projMat);
     gl.uniformMatrix4fv(uQ.view, false, viewMat);
-    bindAttr(progQ, 'aP', quadBuf, 2);
     gl.uniform1i(uQ.tex, 0);
     gl.uniform1i(uQ.depth, 1);
     gl.uniform1f(uQ.time, lifeTime);
@@ -1769,12 +1822,16 @@
     if (plateA > 0.01 && blackTex) {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, blackTex);
+      bindAttr(progQ, 'aP', quadBuf, 2);
       gl.uniform2f(uQ.uvScale, 1, 1);
       gl.uniform2f(uQ.uvOffset, 0, 0);
       gl.uniform2f(uQ.par, 0, 0);
       gl.uniform1f(uQ.depthK, 0);
       gl.uniform1f(uQ.life, 0);
       gl.uniform1f(uQ.noDepth, 1);
+      gl.uniform1f(uQ.ao, 0);
+      gl.uniform1f(uQ.disp, 0);
+      gl.uniform2f(uQ.rot, 0, 0);
       gl.uniform1f(uQ.opacity, plateA);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, texMid);
@@ -1786,6 +1843,15 @@
       }
     }
 
+    /* 指针带着整张照片的曲面轻微旋转：这是真正的三维，不只是平面位移 */
+    lastRotY = -parX * 0.055 + Math.sin(lifeTime * 0.13) * 0.012;
+    lastRotX = parY * 0.042 + Math.cos(lifeTime * 0.11) * 0.010;
+    if (!hasVertexTex) { lastRotX = 0; lastRotY = 0; }
+
+    if (gridBuf) {
+      bindAttr(progQ, 'aP', gridBuf, 2);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gridIdx);
+    }
     for (var qi = 0; qi < drawn.length; qi++) {
       var dd0 = drawn[qi];
       if (dd0.idx === active) {
@@ -1795,6 +1861,8 @@
         activePlane.uvOx = dd0.uvOx; activePlane.uvOy = dd0.uvOy;
         activePlane.depthK = STAGES[dd0.idx].depthK;
         activePlane.life = STAGES[dd0.idx].life;
+        activePlane.disp = baseH * dd0.f * STAGES[dd0.idx].disp;
+        activePlane.rotX = lastRotX; activePlane.rotY = lastRotY;
         activePlane.pl = dd0.pl;
       }
       gl.uniform3f(uQ.pos, dd0.px, dd0.py, -D);
@@ -1813,11 +1881,15 @@
       gl.uniform1f(uQ.life, stg.life);
       gl.uniform1f(uQ.noDepth, dd0.pl.depth ? 0 : 1);
       gl.uniform1f(uQ.time, lifeTime);
+      gl.uniform1f(uQ.disp, dd0.pl.depth && hasVertexTex ? baseH * dd0.f * stg.disp : 0);
+      gl.uniform1f(uQ.ao, dd0.pl.depth ? stg.ao : 0);
+      gl.uniform2f(uQ.rot, lastRotX, lastRotY);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, dd0.pl.depth || texMid);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, dd0.pl.tex);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      if (gridBuf) gl.drawElements(gl.TRIANGLES, gridCount, gl.UNSIGNED_SHORT, 0);
+      else gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
     /* 3. 前景星尘：宇宙尺度上压在影像之上，制造纵深 */
@@ -1863,8 +1935,9 @@
       var h = s.hotspots[k];
       var wx = activePlane.px + (h.x / 100 - 0.5) * activePlane.w;
       var wy = activePlane.py - (h.y / 100 - 0.5) * activePlane.h;
-      /* 补偿深度视差：热点要跟着画面那一块一起动 */
+      /* 补偿：纹理视差 + 顶点抬升 + 平面的三维旋转，热点要贴着画面那一块 */
       var apl = activePlane.pl;
+      var lz = 0;
       if (apl && apl.dd && activePlane.uvSx) {
         var hu = (h.x / 100) * activePlane.uvSx + activePlane.uvOx;
         var hv = (h.y / 100) * activePlane.uvSy + activePlane.uvOy;
@@ -1878,8 +1951,15 @@
         dv += Math.cos(lifeTime * 0.09 + hu * 0.6) * br;
         wx += du * activePlane.w / activePlane.uvSx;
         wy -= dv * activePlane.h / activePlane.uvSy;
+        if (hasVertexTex) lz = (dv2 - 0.5) * (activePlane.disp || 0);
       }
-      var pt = projectPoint([wx, wy, activePlane.z], viewMat, W, H);
+      var lx = wx - activePlane.px, ly = wy - activePlane.py;
+      var cyR = Math.cos(activePlane.rotY || 0), syR = Math.sin(activePlane.rotY || 0);
+      var rx = lx * cyR + lz * syR, rz = -lx * syR + lz * cyR;
+      var cxR = Math.cos(activePlane.rotX || 0), sxR = Math.sin(activePlane.rotX || 0);
+      var ry = ly * cxR - rz * sxR;
+      rz = ly * sxR + rz * cxR;
+      var pt = projectPoint([activePlane.px + rx, activePlane.py + ry, activePlane.z + rz], viewMat, W, H);
       if (pt) {
         hotspotBtns[k].style.left = pt.x.toFixed(1) + 'px';
         hotspotBtns[k].style.top = pt.y.toFixed(1) + 'px';
@@ -3168,4 +3248,8 @@
 </script>
 </body>
 </html>
+
+
+
+
 
