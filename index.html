@@ -453,11 +453,79 @@
     .layer.live img{animation:none}
     .hotspot::after{animation:none}
   }
+
+  /* ============ 跨越数量级：速度线 / 对数尺 / 量级水印 ============ */
+  #fx{position:fixed;inset:0;z-index:6;pointer-events:none;width:100%;height:100%}
+
+  #voyage{
+    position:fixed;inset:0;z-index:12;pointer-events:none;opacity:0;
+    transition:opacity .5s ease;
+  }
+  #voyageNum{
+    position:absolute;left:50%;top:30%;transform:translate(-50%,-50%);
+    font-family:var(--serif);font-weight:400;line-height:1;white-space:nowrap;
+    font-size:clamp(72px,13vw,168px);letter-spacing:.02em;
+    color:rgba(238,235,228,.075);opacity:0;
+  }
+  #voyageNum sup{font-size:.4em;vertical-align:super;letter-spacing:.06em}
+  #voyageNum em{
+    font-style:normal;font-size:.1em;letter-spacing:.5em;
+    vertical-align:middle;margin-left:.4em;color:rgba(238,235,228,.22);
+  }
+  #voyageNum.pop{animation:vnum .9s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes vnum{
+    0%{opacity:0;transform:translate(-50%,-44%);filter:blur(6px)}
+    35%{opacity:1}
+    100%{opacity:1;transform:translate(-50%,-50%);filter:blur(0)}
+  }
+
+  #vruler{
+    position:absolute;left:50%;top:88px;transform:translateX(-50%);
+    width:min(600px,58vw);height:44px;overflow:hidden;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 16%,#000 84%,transparent);
+    mask-image:linear-gradient(90deg,transparent,#000 16%,#000 84%,transparent);
+  }
+  #vruler::after{
+    content:"";position:absolute;left:0;right:0;bottom:10px;height:1px;
+    background:rgba(238,235,228,.14);
+  }
+  #vrTrack{position:absolute;left:0;bottom:10px;height:0;will-change:transform}
+  .vtick{
+    position:absolute;bottom:0;width:1px;height:6px;
+    background:rgba(238,235,228,.22);
+  }
+  .vtick.major{height:11px;background:rgba(216,185,140,.5)}
+  .vtick span{
+    position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
+    font-family:var(--mono);font-size:9px;letter-spacing:.1em;
+    color:rgba(238,235,228,.42);white-space:nowrap;
+    text-shadow:0 1px 5px rgba(0,0,0,.9);
+  }
+  .vneedle{
+    position:absolute;left:50%;bottom:0;width:1px;height:34px;transform:translateX(-50%);
+    background:linear-gradient(to top,rgba(216,185,140,.9),rgba(216,185,140,.1));
+  }
+  .vneedle::after{
+    content:"";position:absolute;left:50%;top:-3px;width:5px;height:5px;margin-left:-2.5px;
+    border-radius:50%;background:var(--sand);box-shadow:0 0 14px rgba(216,185,140,.95);
+  }
+  #vread{
+    position:absolute;left:50%;top:138px;transform:translateX(-50%);
+    font-family:var(--mono);font-size:10px;letter-spacing:.22em;
+    color:var(--sand-dim);white-space:nowrap;
+    text-shadow:0 1px 6px rgba(0,0,0,.9);
+  }
+  @media (max-width:900px){
+    #vruler{top:64px;width:76vw}
+    #vread{top:112px;font-size:9px;letter-spacing:.16em}
+    #voyageNum{top:32%}
+  }
 </style>
 </head>
 <body>
 
 <div id="stage" aria-label="尺度场景"></div>
+<canvas id="fx"></canvas>
 <div id="void"></div>
 <div id="grain"></div>
 <div id="vignette"></div>
@@ -467,6 +535,12 @@
   <div class="kicker">跨 越 尺 度</div>
   <p id="voidText">这里几乎什么都没有</p>
   <button id="skipBtn">跳到下一站 →</button>
+</div>
+
+<div id="voyage" aria-hidden="true">
+  <div id="voyageNum">10<sup>12</sup><em>米</em></div>
+  <div id="vruler"><div id="vrTrack"></div><i class="vneedle"></i></div>
+  <div id="vread">1.0 × 10¹² 米</div>
 </div>
 
 <header class="top">
@@ -724,6 +798,96 @@
   var voidLabel = document.getElementById('voidLabel');
   var voidText = document.getElementById('voidText');
   var skipBtn = document.getElementById('skipBtn');
+
+  /* ---------- 跨越数量级：对数尺 / 读数 / 巨号水印 ---------- */
+  var voyageEl = document.getElementById('voyage');
+  var voyageNum = document.getElementById('voyageNum');
+  var vread = document.getElementById('vread');
+  var vruler = document.getElementById('vruler');
+  var vrTrack = document.getElementById('vrTrack');
+  var VOY_MIN = 6, VOY_MAX = 28, VOY_STEP = 64;
+  var lastVoyExp = null;
+  var SUP_DIGITS = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+  function supNum(n) {
+    var out = '', s = String(n);
+    for (var i = 0; i < s.length; i++) out += SUP_DIGITS.charAt(+s.charAt(i));
+    return out;
+  }
+  (function buildRuler() {
+    var frag = document.createDocumentFragment();
+    for (var e = VOY_MIN; e <= VOY_MAX; e++) {
+      var tick = document.createElement('i');
+      var major = e % 2 === 0;
+      tick.className = 'vtick' + (major ? ' major' : '');
+      tick.style.left = ((e - VOY_MIN) * VOY_STEP) + 'px';
+      if (major) {
+        var lab = document.createElement('span');
+        lab.textContent = '10' + supNum(e);
+        tick.appendChild(lab);
+      }
+      frag.appendChild(tick);
+    }
+    vrTrack.appendChild(frag);
+  })();
+
+  /* ---------- 跃迁时从画面中心向外飞的速度线 ---------- */
+  var fxCanvas = document.getElementById('fx');
+  var fxc = fxCanvas ? fxCanvas.getContext('2d') : null;
+  var streaks = [], fxW = 0, fxH = 0, fxDpr = 1, fxLastTs = 0;
+  function fxResize() {
+    if (!fxc) return;
+    fxDpr = Math.min(2, window.devicePixelRatio || 1);
+    fxW = window.innerWidth; fxH = window.innerHeight;
+    fxCanvas.width = Math.round(fxW * fxDpr);
+    fxCanvas.height = Math.round(fxH * fxDpr);
+    fxc.setTransform(fxDpr, 0, 0, fxDpr, 0, 0);
+  }
+  fxResize();
+  window.addEventListener('resize', fxResize);
+  (function buildStreaks() {
+    var maxR = Math.hypot(window.innerWidth, window.innerHeight) * 0.62;
+    for (var i = 0; i < 128; i++) {
+      streaks.push({
+        a: Math.random() * Math.PI * 2,
+        r: 30 + Math.random() * maxR,
+        v: 260 + Math.random() * 880,
+        k: 0.18 + Math.random() * 0.55,
+        w: Math.random() < 0.84 ? 1 : 1.7
+      });
+    }
+  })();
+  function drawStreaks(ts) {
+    if (!fxc) return;
+    var dt = fxLastTs ? Math.min(0.05, (ts - fxLastTs) / 1000) : 0.016;
+    fxLastTs = ts;
+    var cx = fxW / 2, cy = fxH / 2;
+    var maxR = Math.hypot(fxW, fxH) * 0.62;
+    var amt = Math.min(1, voyageAmt * 1.2);
+    fxc.clearRect(0, 0, fxW, fxH);
+    fxc.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < streaks.length; i++) {
+      var st = streaks[i];
+      st.r += st.v * dt * (0.6 + voyageAmt * 0.8);
+      if (st.r > maxR) { st.r = 30 + Math.random() * 150; st.a = Math.random() * Math.PI * 2; }
+      var ca = Math.cos(st.a), sa = Math.sin(st.a);
+      var len = 18 + st.r * 0.22;
+      var edge = st.r / maxR;
+      var al = amt * st.k * Math.min(1, st.r / 180) * (1 - edge * edge);
+      if (al < 0.012) continue;
+      fxc.strokeStyle = 'rgba(198,216,255,' + al.toFixed(3) + ')';
+      fxc.lineWidth = st.w;
+      fxc.beginPath();
+      fxc.moveTo(cx + ca * st.r, cy + sa * st.r);
+      fxc.lineTo(cx + ca * (st.r + len), cy + sa * (st.r + len));
+      fxc.stroke();
+    }
+    fxc.globalCompositeOperation = 'source-over';
+  }
+  function clearStreaks() {
+    if (!fxc || !fxLastTs) return;
+    fxc.clearRect(0, 0, fxW, fxH);
+    fxLastTs = 0;
+  }
   var slider = document.getElementById('slider');
   var loaderEl = document.getElementById('loader');
   var endingEl = document.getElementById('ending');
@@ -1482,14 +1646,25 @@
       var op = (i === holdIdx) ? 1 : pl.opacity;
       if (!pl.ready || op < 0.004) continue;
       var s = STAGES[i];
-      /* 普通转场保持满屏叠化；只有大跨度（跃迁）才让画面后退 */
-      var gp = i > 0 ? s.u - STAGES[i - 1].u : 4;
-      var gn = i < STAGES.length - 1 ? STAGES[i + 1].u - s.u : 4;
-      var bigGap = (u > s.u ? gn : gp) > 2.4;
-      var coef = bigGap ? (u > s.u ? 0.45 : 0.30) : 0.04;
-      var f = 1 + coef * Math.min(6, Math.abs(u - s.u));
-      var px = Math.sin(i * 1.7) * 0.45 * (f - 1);
-      var py = Math.cos(i * 2.3) * 0.3 * (f - 1);
+      /* 全程满屏叠化，中间不再露星空。
+         跨越数量级时改成"推镜"：送出去的图缓慢放大，接进来的图从 1.16 倍收回 1——
+         两张图同心推拉，看起来是镜头穿过这一层，而不是两张照片淡淡地换掉。 */
+      var f = 1, px = 0, py = 0;
+      if (i < STAGES.length - 1 && u > s.u) {
+        var gN = STAGES[i + 1].u - s.u;
+        if (gN > 2.8) {
+          var tN = clamp((u - s.u) / gN, 0, 1);
+          tN = tN * tN * (3 - 2 * tN);
+          f = 1 + 0.16 * tN;
+        }
+      } else if (i > 0 && u < s.u) {
+        var gP = s.u - STAGES[i - 1].u;
+        if (gP > 2.8) {
+          var tP = clamp((u - STAGES[i - 1].u) / gP, 0, 1);
+          tP = tP * tP * (3 - 2 * tP);
+          f = 1.16 - 0.16 * tP;
+        }
+      }
 
       /* 画面比例裁切（等价于 object-fit: cover） */
       var uvSx = 1, uvSy = 1, uvOx = 0, uvOy = 0;
@@ -1516,10 +1691,10 @@
       gl.uniform2f(uQ.uvScale, 1, 1);
       gl.uniform2f(uQ.uvOffset, 0, 0);
       gl.uniform1f(uQ.opacity, plateA);
-      gl.uniform2f(uQ.size, baseW * 1.02, baseH * 1.02);
       for (var di = 0; di < drawn.length; di++) {
         var d0 = drawn[di];
-        gl.uniform3f(uQ.pos, d0.px, d0.py, -D * d0.f * 1.005);
+        gl.uniform3f(uQ.pos, d0.px, d0.py, -D * 1.006);
+        gl.uniform2f(uQ.size, baseW * d0.f * 1.02, baseH * d0.f * 1.02);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
     }
@@ -1527,11 +1702,11 @@
     for (var qi = 0; qi < drawn.length; qi++) {
       var dd0 = drawn[qi];
       if (dd0.idx === active) {
-        activePlane.px = dd0.px; activePlane.py = dd0.py; activePlane.z = -D * dd0.f;
-        activePlane.w = baseW; activePlane.h = baseH;
+        activePlane.px = dd0.px; activePlane.py = dd0.py; activePlane.z = -D;
+        activePlane.w = baseW * dd0.f; activePlane.h = baseH * dd0.f;
       }
-      gl.uniform3f(uQ.pos, dd0.px, dd0.py, -D * dd0.f);
-      gl.uniform2f(uQ.size, baseW, baseH);
+      gl.uniform3f(uQ.pos, dd0.px, dd0.py, -D);
+      gl.uniform2f(uQ.size, baseW * dd0.f, baseH * dd0.f);
       gl.uniform2f(uQ.uvScale, dd0.uvSx, dd0.uvSy);
       gl.uniform2f(uQ.uvOffset, dd0.uvOx, dd0.uvOy);
       gl.uniform1f(uQ.opacity, dd0.op * (1 - earthMix) * (1 - solarMix) * (1 - galaxyMix) *
@@ -1576,8 +1751,8 @@
       if (hotspotsEl.style.opacity !== '0') hotspotsEl.style.opacity = '0';
       return;
     }
-    var target = voidNow > 0.02 ? clamp(1 - voidNow * 1.6, 0, 1).toFixed(2) : '1';
-    if (hotspotsEl.style.opacity !== target) hotspotsEl.style.opacity = target;
+    /* 影像全程在场，热点也就不必在跃迁段隐身 */
+    if (hotspotsEl.style.opacity !== '1') hotspotsEl.style.opacity = '1';
     var s = STAGES[active];
     if (!s.hotspots) return;
     var W = window.innerWidth, H = window.innerHeight;
@@ -2041,7 +2216,7 @@
   var u = MIN_U;
   var active = 0;
   var factTimer = null;
-  var playing = false, rafId = null, playT0 = 0, playFrom = 0, lastTs = 0, voidNow = 0;
+  var playing = false, rafId = null, playT0 = 0, playFrom = 0, lastTs = 0, voidNow = 0, voyageAmt = 0;
   var dragY = null, dragStartU = 0, dragDist = 0;
   var lastPointer = null;
   var endPending = false, endShown = false;
@@ -2077,14 +2252,41 @@
       }
     }
     voidNow = v;
-    /* 3D 模式：影像在空白尺度里退场，让星尘接管画面 */
-    if (GL_OK && v > 0) {
-      var vf = 1 - Math.min(1, v * 1.15);
-      for (var pi = 0; pi < planes.length; pi++) planes[pi].opacity *= vf;
+    /* 影像不再在空白尺度里退场：整段旅程都是满屏叠化，星空只在影像之外露出 */
+
+    /* 跃迁仪表的作用范围覆盖整段跨度，中段最强——毕竟"跨越"本身就是一段旅程 */
+    var vw = 0;
+    for (var gg = 0; gg < STAGES.length - 1; gg++) {
+      var gGap = STAGES[gg + 1].u - STAGES[gg].u;
+      if (gGap < 2.8) continue;
+      var gT = (u - STAGES[gg].u) / gGap;
+      if (gT > 0 && gT < 1) {
+        var gS = Math.sin(Math.PI * gT);
+        if (gS > vw) vw = gS;
+      }
+    }
+    voyageAmt = vw;
+
+    /* 跨越数量级的仪表：对数尺 + 实时读数 + 大号量级水印 */
+    voyageEl.style.opacity = clamp(vw * 2, 0, 1).toFixed(3);
+    if (vw > 0.004) {
+      var vExp = Math.floor(u);
+      var vMant = Math.pow(10, u - vExp);
+      var vTxt = vMant.toFixed(1) + ' × 10' + supNum(vExp) + ' 米';
+      if (vread.textContent !== vTxt) vread.textContent = vTxt;
+      var trackX = vruler.clientWidth / 2 - (u - VOY_MIN) * VOY_STEP;
+      vrTrack.style.transform = 'translate3d(' + trackX.toFixed(1) + 'px,0,0)';
+      if (vExp !== lastVoyExp) {
+        lastVoyExp = vExp;
+        voyageNum.innerHTML = '10<sup>' + vExp + '</sup><em>米</em>';
+        voyageNum.classList.remove('pop');
+        void voyageNum.offsetWidth;
+        voyageNum.classList.add('pop');
+      }
     }
     voidEl.style.opacity = (GL_OK ? 0 : v).toFixed(3);
     voidLabel.style.opacity = v > 0.45 ? ((v - 0.45) / 0.55).toFixed(2) : '0';
-    hotspotsEl.style.opacity = (earthMode || solarMode || galaxyMode) ? '0' : clamp(1 - v * 1.6, 0, 1).toFixed(2);
+    hotspotsEl.style.opacity = (earthMode || solarMode || galaxyMode) ? '0' : '1';
     if (vg >= 0) {
       var line = VOID_LINES[vg];
       if (line && voidText.textContent !== line) voidText.textContent = line;
@@ -2213,7 +2415,7 @@
     var dt = Math.min(ts - lastTs, 400) / 1000;
     lastTs = ts;
     /* 空白尺度加速通过，避免长时间黑场 */
-    var speed = 0.62 * (voidNow > 0.3 ? 2.4 : 1);
+    var speed = 0.62 * (voyageAmt > 0.3 ? 2.4 : 1);
     var nu = u + dt * speed;
     if (nu >= MAX_U) { setU(MAX_U); stopPlay(); return; }
     setU(nu);
@@ -2833,6 +3035,7 @@
       updateOrbitCta();
     }
 
+    if (voyageAmt > 0.01 && !reduceMotion) drawStreaks(ts); else clearStreaks();
     drawScene();
     requestAnimationFrame(idleLoop);
   }
