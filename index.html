@@ -1009,7 +1009,7 @@
   }
 
   var progQ = null, progP = null, progS = null, progSun = null, progLine = null, progRing = null, progCloud = null;
-  var quadBuf, starBuf, dustBuf, sphereGeo = null, ringGeo = null, orbitGeo = [];
+  var quadBuf, starBuf, dustBuf, sphereGeo = null, ringGeo = null, orbitGeo = [], blackTex = null;
   var uQ = {}, uP = {}, uS = {}, uSunP = {}, uLine = {}, uRing = {}, uC = {};
 
   if (GL_OK) {
@@ -1056,6 +1056,16 @@
     quadBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+
+    /* 1×1 黑色贴图：转场时垫在影像后面，避免两张半透明图之间漏出星空 */
+    blackTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, blackTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+      new Uint8Array([0, 0, 0, 255]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
     /* 球体几何 */
     function buildSphere(seg, rings) {
@@ -1449,16 +1459,39 @@
     bindAttr(progQ, 'aP', quadBuf, 2);
     gl.uniform1i(uQ.tex, 0);
 
+    /* 目标图还没解码完时，让最近一张已就绪的图撑住建场，避免中途只剩星空 */
+    var bestIdx = 0, bestO = -1;
+    for (var bi = 0; bi < planes.length; bi++) {
+      if (planes[bi].opacity > bestO) { bestO = planes[bi].opacity; bestIdx = bi; }
+    }
+    var holdIdx = -1;
+    if (bestO > 0.05 && !planes[bestIdx].ready) {
+      var hd = 1e9;
+      for (var hi = 0; hi < planes.length; hi++) {
+        if (!planes[hi].ready) continue;
+        var dd = Math.abs(STAGES[hi].u - u);
+        if (dd < hd) { hd = dd; holdIdx = hi; }
+      }
+    }
+
+    /* 先把要画的影像和它们的位姿算出来 */
+    var drawn = [];
+    var scrAspect = canvas.width / canvas.height;
     for (var i = 0; i < planes.length; i++) {
       var pl = planes[i];
-      if (!pl.ready || pl.opacity < 0.004) continue;
+      var op = (i === holdIdx) ? 1 : pl.opacity;
+      if (!pl.ready || op < 0.004) continue;
       var s = STAGES[i];
-      var f = 1 + (u > s.u ? 0.45 : 0.30) * Math.min(6, Math.abs(u - s.u));
+      /* 普通转场保持满屏叠化；只有大跨度（跃迁）才让画面后退 */
+      var gp = i > 0 ? s.u - STAGES[i - 1].u : 4;
+      var gn = i < STAGES.length - 1 ? STAGES[i + 1].u - s.u : 4;
+      var bigGap = (u > s.u ? gn : gp) > 2.4;
+      var coef = bigGap ? (u > s.u ? 0.45 : 0.30) : 0.04;
+      var f = 1 + coef * Math.min(6, Math.abs(u - s.u));
       var px = Math.sin(i * 1.7) * 0.45 * (f - 1);
       var py = Math.cos(i * 2.3) * 0.3 * (f - 1);
 
       /* 画面比例裁切（等价于 object-fit: cover） */
-      var scrAspect = canvas.width / canvas.height;
       var uvSx = 1, uvSy = 1, uvOx = 0, uvOy = 0;
       if (pl.aspect > scrAspect) {
         uvSx = scrAspect / pl.aspect;
@@ -1467,20 +1500,45 @@
         uvSy = pl.aspect / scrAspect;
         uvOy = (1 - uvSy) * pl.posY;
       }
+      drawn.push({ idx: i, pl: pl, op: op, f: f, px: px, py: py,
+        uvSx: uvSx, uvSy: uvSy, uvOx: uvOx, uvOy: uvOy });
+    }
 
-      if (i === active) {
-        activePlane.px = px; activePlane.py = py; activePlane.z = -D * f;
+    /* 黑色底板：两张半透明图叠化时，背景剩余比例是 (1-a)(1-b)，星点会从中间漏出来。
+       给每张影像垫一块同尺寸的黑板，把这个缺口补上——静止时被不透明影像完全遮住，
+       看不出区别；星云 / 跃迁段总透明度本来就低，黑板也随之变淡，星空照常露出。 */
+    var cov = 0;
+    for (var ci = 0; ci < drawn.length; ci++) cov += drawn[ci].op;
+    var plateA = Math.min(1, cov) * (1 - Math.max(earthMix, solarMix, galaxyMix));
+    if (plateA > 0.01 && blackTex) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, blackTex);
+      gl.uniform2f(uQ.uvScale, 1, 1);
+      gl.uniform2f(uQ.uvOffset, 0, 0);
+      gl.uniform1f(uQ.opacity, plateA);
+      gl.uniform2f(uQ.size, baseW * 1.02, baseH * 1.02);
+      for (var di = 0; di < drawn.length; di++) {
+        var d0 = drawn[di];
+        gl.uniform3f(uQ.pos, d0.px, d0.py, -D * d0.f * 1.005);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      }
+    }
+
+    for (var qi = 0; qi < drawn.length; qi++) {
+      var dd0 = drawn[qi];
+      if (dd0.idx === active) {
+        activePlane.px = dd0.px; activePlane.py = dd0.py; activePlane.z = -D * dd0.f;
         activePlane.w = baseW; activePlane.h = baseH;
       }
-      gl.uniform3f(uQ.pos, px, py, -D * f);
+      gl.uniform3f(uQ.pos, dd0.px, dd0.py, -D * dd0.f);
       gl.uniform2f(uQ.size, baseW, baseH);
-      gl.uniform2f(uQ.uvScale, uvSx, uvSy);
-      gl.uniform2f(uQ.uvOffset, uvOx, uvOy);
-      gl.uniform1f(uQ.opacity, pl.opacity * (1 - earthMix) * (1 - solarMix) * (1 - galaxyMix) *
+      gl.uniform2f(uQ.uvScale, dd0.uvSx, dd0.uvSy);
+      gl.uniform2f(uQ.uvOffset, dd0.uvOx, dd0.uvOy);
+      gl.uniform1f(uQ.opacity, dd0.op * (1 - earthMix) * (1 - solarMix) * (1 - galaxyMix) *
         (1 - 0.8 * Math.sin(Math.PI * earthMix)) * (1 - 0.8 * Math.sin(Math.PI * solarMix)) *
         (1 - 0.8 * Math.sin(Math.PI * galaxyMix)));
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, pl.tex);
+      gl.bindTexture(gl.TEXTURE_2D, dd0.pl.tex);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
