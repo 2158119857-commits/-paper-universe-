@@ -761,14 +761,22 @@
   var STAGE_LIFE = [0.35, 0.55, 1.0, 0.6, 0.35, 0.32, 0.7, 1.0, 0.85, 0.7, 0.95];
   var STAGE_DEPTH = [1.0, 1.35, 1.1, 1.25, 0.85, 1.0, 0.6, 0.85, 0.8, 0.7, 0.5];
   /* 顶点抬升幅度（相对画面高度）：沙丘/沙粒起伏大，星空几乎是平的 */
-  var STAGE_DISP = [0.12, 0.15, 0.07, 0.12, 0.05, 0.08, 0.03, 0.05, 0.04, 0.04, 0.03];
+  var STAGE_DISP = [0.17, 0.21, 0.10, 0.17, 0.07, 0.11, 0.04, 0.07, 0.05, 0.05, 0.04];
   /* 深度图起伏的环境光遮蔽强度：地形/沙粒明显，星空几乎没有 */
   var STAGE_AO = [12, 16, 10, 14, 6, 8, 3, 4, 4, 4, 3];
+  /* 方向光强度：浮雕的高光/暗面随指针方向变化 */
+  var STAGE_RELIEF = [10, 12, 6, 10, 4, 5, 2, 3, 3, 3, 2];
+  /* 云层漂移 / 星野慢转 */
+  var STAGE_CLOUD = [0, 0, 0, 0.5, 1.0, 0, 0, 0, 0, 0, 0];
+  var STAGE_SPIN = [0, 0, 0, 0, 0, 0, 0.0005, 0.0009, 0.0006, 0.0007, 0.0004];
   for (var _si = 0; _si < STAGES.length; _si++) {
     STAGES[_si].life = STAGE_LIFE[_si];
     STAGES[_si].depthK = STAGE_DEPTH[_si];
     STAGES[_si].disp = STAGE_DISP[_si];
     STAGES[_si].ao = STAGE_AO[_si];
+    STAGES[_si].relief = STAGE_RELIEF[_si];
+    STAGES[_si].cloud = STAGE_CLOUD[_si];
+    STAGES[_si].spin = STAGE_SPIN[_si];
     STAGES[_si].depth = STAGES[_si].img.replace('/img/', '/depth/').replace(/\.(jpg|png)$/i, '.jpg');
   }
 
@@ -1006,26 +1014,48 @@
     'uniform float uLife;',
     'uniform float uNoDepth;',
     'uniform float uAO;',
+    'uniform float uRelief;',
+    'uniform vec2 uLight;',
+    'uniform float uCloud;',
+    'uniform float uSpin;',
     'void main(){',
     /* 单张照片的深度视差：越近的地方跟手位移越大 */
     '  float d = texture2D(uDepth, vUv).r;',
     '  vec2 uv = vUv + uPar * (d - 0.5) * uDepthK * (1.0 - uNoDepth);',
-    /* 用深度图的局部起伏做一点点环境光遮蔽：凹陷处暗下去，表面才有实体感 */
+    /* 深度邻域：环境光遮蔽 + 方向光，浮雕感会跟着光的方向变 */
     '  float e = 0.0035;',
-    '  float av = (texture2D(uDepth, vUv + vec2(e, 0.0)).r + texture2D(uDepth, vUv - vec2(e, 0.0)).r' +
-    '           + texture2D(uDepth, vUv + vec2(0.0, e)).r + texture2D(uDepth, vUv - vec2(0.0, e)).r) * 0.25;',
+    '  float dL = texture2D(uDepth, vUv - vec2(e, 0.0)).r;',
+    '  float dR = texture2D(uDepth, vUv + vec2(e, 0.0)).r;',
+    '  float dT = texture2D(uDepth, vUv - vec2(0.0, e)).r;',
+    '  float dB = texture2D(uDepth, vUv + vec2(0.0, e)).r;',
+    '  float av = (dL + dR + dT + dB) * 0.25;',
     '  float ao = clamp(1.0 - (av - d) * uAO, 0.55, 1.0);',
-    /* 极慢的呼吸，静止时画面也在活着 */
+    '  float relief = clamp(dot(vec2(dR - dL, dB - dT), uLight) * uRelief, -0.32, 0.32);',
     '  float t = uTime;',
+    /* 星野极慢转动：像镜头在漂移（缩一点，避免采到画面外） */
+    '  if (uSpin > 0.0) {',
+    '    vec2 rc = uv - 0.5;',
+    '    float ca = cos(uSpin * t), sa = sin(uSpin * t);',
+    '    uv = vec2(rc.x * ca - rc.y * sa, rc.x * sa + rc.y * ca) * 0.985 + 0.5;',
+    '  }',
+    /* 极慢的呼吸，静止时画面也在活着 */
     '  uv += vec2(sin(t * 0.11 + vUv.y * 0.7), cos(t * 0.09 + vUv.x * 0.6)) * 0.0018 * uLife;',
     '  vec3 c = texture2D(uTex, uv).rgb;',
-    /* 高光呼吸：城市灯火、星点会微微闪烁 */
     '  float lum = dot(c, vec3(0.299, 0.587, 0.114));',
+    /* 云层相对地面漂移：只作用在“白且不鲜艳”的像素上 */
+    '  if (uCloud > 0.0) {',
+    '    float sat = max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b);',
+    '    float cm = smoothstep(0.52, 0.88, lum) * (1.0 - smoothstep(0.05, 0.22, sat));',
+    '    vec2 cuv = uv + vec2(sin(uv.y * 11.0 + t * 0.06), cos(uv.x * 8.0 - t * 0.05)) * 0.0045 * uCloud;',
+    '    vec3 c2 = texture2D(uTex, cuv).rgb;',
+    '    c = mix(c, c2, cm * 0.85 * uCloud);',
+    '  }',
+    /* 高光呼吸：城市灯火、星点会微微闪烁 */
     '  float tw = sin(t * 1.6 + vUv.x * 137.0 + vUv.y * 91.0) * 0.5 + 0.5;',
     '  float tw2 = sin(t * 0.83 + vUv.x * 53.0 - vUv.y * 71.0) * 0.5 + 0.5;',
     '  float sparkle = (tw * 0.62 + tw2 * 0.38 - 0.52) * smoothstep(0.34, 0.92, lum);',
     '  c *= 1.0 + sparkle * 0.12 * uLife;',
-    '  c *= ao;',
+    '  c *= ao * (1.0 + relief);',
     /* 边缘压暗一点点，镜头味 */
     '  vec2 q = vUv - 0.5;',
     '  c *= 1.0 - dot(q, q) * 0.10;',
@@ -1264,6 +1294,10 @@
       life: gl.getUniformLocation(progQ, 'uLife'),
       noDepth: gl.getUniformLocation(progQ, 'uNoDepth'),
       ao: gl.getUniformLocation(progQ, 'uAO'),
+      relief: gl.getUniformLocation(progQ, 'uRelief'),
+      light: gl.getUniformLocation(progQ, 'uLight'),
+      cloud: gl.getUniformLocation(progQ, 'uCloud'),
+      spin: gl.getUniformLocation(progQ, 'uSpin'),
       disp: gl.getUniformLocation(progQ, 'uDisp'),
       rot: gl.getUniformLocation(progQ, 'uRot')
     };
@@ -1830,6 +1864,10 @@
       gl.uniform1f(uQ.life, 0);
       gl.uniform1f(uQ.noDepth, 1);
       gl.uniform1f(uQ.ao, 0);
+      gl.uniform1f(uQ.relief, 0);
+      gl.uniform1f(uQ.cloud, 0);
+      gl.uniform1f(uQ.spin, 0);
+      gl.uniform2f(uQ.light, 0, -1);
       gl.uniform1f(uQ.disp, 0);
       gl.uniform2f(uQ.rot, 0, 0);
       gl.uniform1f(uQ.opacity, plateA);
@@ -1883,6 +1921,13 @@
       gl.uniform1f(uQ.time, lifeTime);
       gl.uniform1f(uQ.disp, dd0.pl.depth && hasVertexTex ? baseH * dd0.f * stg.disp : 0);
       gl.uniform1f(uQ.ao, dd0.pl.depth ? stg.ao : 0);
+      gl.uniform1f(uQ.relief, dd0.pl.depth ? stg.relief : 0);
+      /* 光从画面左上打来，再被指针轻轻带偏——斜面会随鼠标明暗变化 */
+      var lx0 = -0.6 + parX * 0.55, ly0 = -0.8 + parY * 0.45;
+      var ll = Math.sqrt(lx0 * lx0 + ly0 * ly0) || 1;
+      gl.uniform2f(uQ.light, lx0 / ll, ly0 / ll);
+      gl.uniform1f(uQ.cloud, stg.cloud);
+      gl.uniform1f(uQ.spin, stg.spin);
       gl.uniform2f(uQ.rot, lastRotX, lastRotY);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, dd0.pl.depth || texMid);
@@ -3172,7 +3217,7 @@
     canvas.style.height = h + 'px';
     if (!GL_OK) return;
     projMat = perspective(FOV, w / h, 0.1, 600);
-    baseH = 2 * Math.tan(FOV / 2) * D * 1.08;
+    baseH = 2 * Math.tan(FOV / 2) * D * 1.11;
     baseW = baseH * (w / h);
     if (typeof active === 'number' && STAGES[active]) {
       humanText.textContent = humanLine(STAGES[active]);
