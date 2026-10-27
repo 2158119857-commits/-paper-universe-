@@ -3,6 +3,10 @@ node_modules/
 
 # 本地工具与中间产物
 tools/depth_model.onnx
+tools/log_timeline.json
+_*.js
+_*.jpg
+_*.png
 _check.js
 _shot.js
 _shot*.jpg
