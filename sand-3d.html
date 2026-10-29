@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>一粒沙 · 程序化重建</title>
+<style>
+  :root{
+    --ink:#eeebe4; --muted:rgba(238,235,228,.56); --faint:rgba(238,235,228,.3);
+    --sand:#d8b98c;
+    --serif:"Songti SC","Source Han Serif SC","Noto Serif SC","SimSun","STSong",Georgia,serif;
+    --mono:"SF Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:#05060a;color:var(--ink);overflow:hidden;
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif}
+  #gl{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:crosshair}
+  #gl.drag{cursor:grabbing}
+  .top{position:fixed;left:34px;top:30px;pointer-events:none;z-index:5}
+  .top .k{font:10px/1 var(--mono);letter-spacing:.42em;color:var(--faint)}
+  .top h1{font-family:var(--serif);font-weight:600;font-size:34px;letter-spacing:.12em;margin:14px 0 8px}
+  .top .sub{font-size:12px;line-height:1.7;color:var(--muted)}
+  .top .sub b{color:var(--sand);font-weight:500}
+  .hint{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);
+    font:11px/1 var(--mono);letter-spacing:.16em;color:var(--faint);pointer-events:none;z-index:5}
+  .back{position:fixed;left:34px;bottom:26px;z-index:6;
+    font:11px/1 var(--mono);letter-spacing:.16em;color:var(--muted);
+    background:none;border:1px solid rgba(238,235,228,.18);padding:8px 12px;cursor:pointer}
+  .back:hover{color:var(--ink);border-color:rgba(238,235,228,.4)}
+  .frame{position:fixed;inset:4%;pointer-events:none;opacity:.45;z-index:4}
+  .frame i{position:absolute;width:18px;height:18px;border:0 solid rgba(216,185,140,.5)}
+  .frame .tl{left:0;top:0;border-left-width:1px;border-top-width:1px}
+  .frame .tr{right:0;top:0;border-right-width:1px;border-top-width:1px}
+  .frame .bl{left:0;bottom:0;border-left-width:1px;border-bottom-width:1px}
+  .frame .br{right:0;bottom:0;border-right-width:1px;border-bottom-width:1px}
+  .readout{position:fixed;right:34px;top:32px;text-align:right;
+    font:10px/1.9 var(--mono);letter-spacing:.14em;color:var(--faint);z-index:5}
+  .readout b{color:var(--sand);font-weight:400}
+  .readout button{
+    margin-top:10px;font:10px/1 var(--mono);letter-spacing:.18em;color:var(--sand);
+    background:none;border:1px solid rgba(216,185,140,.35);border-radius:2px;
+    padding:6px 10px;cursor:pointer;
+  }
+  .readout button:hover{border-color:rgba(216,185,140,.7)}
+
+  /* 悬停读数 */
+  #tip{
+    position:fixed;left:0;top:0;z-index:10;pointer-events:none;opacity:0;
+    transform:translate(14px,-50%);transition:opacity .12s;
+    background:rgba(6,8,12,.82);border:1px solid rgba(216,185,140,.35);
+    padding:8px 11px;min-width:128px;
+    font:10px/1.7 var(--mono);letter-spacing:.08em;color:var(--muted);
+    backdrop-filter:blur(4px);
+  }
+  #tip b{display:block;font-family:var(--serif);font-size:14px;letter-spacing:.14em;
+    color:var(--ink);font-weight:600;margin-bottom:2px}
+  #tip .n{color:var(--sand)}
+  #leaders{position:fixed;inset:0;width:100%;height:100%;z-index:9;pointer-events:none}
+  #leaders line{stroke:rgba(216,185,140,.55);stroke-width:1}
+  #leaders circle{fill:none;stroke:rgba(216,185,140,.8);stroke-width:1}
+  .tag{position:fixed;left:0;top:0;z-index:10;pointer-events:none;opacity:0;
+    font:9px/1 var(--mono);letter-spacing:.24em;color:var(--sand);transform:translate(-50%,-160%)}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div class="frame"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i></div>
+
+<svg id="leaders"><line x1="0" y1="0" x2="0" y2="0"></line><circle cx="0" cy="0" r="7"></circle></svg>
+<div id="tip"><b id="tipName">—</b><span id="tipMeta">—</span></div>
+<div class="tag" id="tag">SAMPLE 01</div>
+
+<header class="top">
+  <div class="k">POWERS OF TEN · 01</div>
+  <h1>一粒沙</h1>
+  <div class="sub">程序化重建 · 画面中所有颗粒由算法生成，<b>不是照片</b></div>
+</header>
+<div class="readout">
+  <div>PRIMITIVES <b id="rc">—</b></div>
+  <div>SCALE <b>10⁻² m</b></div>
+  <div>SCAN <b id="scanState">READY</b></div>
+  <button id="rescan">重新扫描</button>
+</div>
+<div class="hint">拖动环绕 · 滚轮缩放 · 悬停读数 · 点击隔离</div>
+<button class="back" id="back">← 返回尺度轴</button>
+
+<script>
+(function () {
+  'use strict';
+  var canvas = document.getElementById('gl');
+  var gl = canvas.getContext('webgl2', { antialias: true, alpha: false }) ||
+           canvas.getContext('webgl', { antialias: true, alpha: false });
+  var isGL2 = !!(window.WebGL2RenderingContext && gl instanceof WebGL2RenderingContext);
+  var SEG = isGL2 ? 12 : 10, RINGS = isGL2 ? 8 : 7;
+  var IDX_TYPE = isGL2 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+
+  var VERT = [
+    'attribute vec3 aPos;',
+    'attribute vec3 aNorm;',
+    'attribute vec3 aCol;',
+    'attribute float aId;',
+    'uniform mat4 uProj;',
+    'uniform mat4 uView;',
+    'varying vec3 vN; varying vec3 vC; varying vec3 vW; varying float vId;',
+    'void main(){',
+    '  vN = aNorm; vC = aCol; vW = aPos; vId = aId;',
+    '  gl_Position = uProj * uView * vec4(aPos, 1.0);',
+    '}'
+  ].join('\n');
+
+  var FRAG = [
+    'precision highp float;',
+    'varying vec3 vN; varying vec3 vC; varying vec3 vW; varying float vId;',
+    'uniform vec3 uEye;',
+    'uniform vec3 uKey;',
+    'uniform vec3 uFill;',
+    'uniform vec3 uRim;',
+    'uniform float uScan;',
+    'uniform float uFocus;',
+    'uniform vec2 uRes;',
+    'uniform sampler2D uShadow;',
+    'uniform mat4 uLightVP;',
+    'uniform float uShadowOn;',
+    'float hash(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }',
+    'float vn(vec3 p){',
+    '  vec3 i = floor(p), f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float n000 = hash(i), n100 = hash(i + vec3(1.0,0.0,0.0));',
+    '  float n010 = hash(i + vec3(0.0,1.0,0.0)), n110 = hash(i + vec3(1.0,1.0,0.0));',
+    '  float n001 = hash(i + vec3(0.0,0.0,1.0)), n101 = hash(i + vec3(1.0,0.0,1.0));',
+    '  float n011 = hash(i + vec3(0.0,1.0,1.0)), n111 = hash(i + vec3(1.0,1.0,1.0));',
+    '  return mix(mix(mix(n000,n100,f.x), mix(n010,n110,f.x), f.y),',
+    '             mix(mix(n001,n101,f.x), mix(n011,n111,f.x), f.y), f.z);',
+    '}',
+    'void main(){',
+    /* 扫描面之后的部分还不存在 */
+    '  if (vW.x > uScan) discard;',
+    '  float band = smoothstep(uScan - 0.85, uScan, vW.x);',
+    '  float dith = hash(floor(vW.xyz * 72.0));',
+    '  if (band > 0.02 && dith < band * 0.78) discard;',
+
+    /* 微观凹凸：让表面不是光滑塑料 */
+    '  vec3 N = normalize(vN);',
+    '  vec3 np = floor(vW * 130.0);',
+    '  vec3 jit = vec3(hash(np), hash(np + 17.0), hash(np + 41.0)) - 0.5;',
+    '  N = normalize(N + jit * 0.05);',
+
+    '  vec3 V = normalize(uEye - vW);',
+    '  vec3 K = normalize(uKey);',
+    '  vec3 F = normalize(uFill);',
+    '  vec3 R = normalize(uRim);',
+
+    /* 阴影：主光方向上的深度比较，3×3 PCF 让边缘柔一点 */
+    '  float lit = 1.0;',
+    '  if (uShadowOn > 0.5) {',
+    '    vec4 lp = uLightVP * vec4(vW, 1.0);',
+    '    vec3 sc = lp.xyz * 0.5 + 0.5;',
+    '    if (sc.x > 0.001 && sc.x < 0.999 && sc.y > 0.001 && sc.y < 0.999) {',
+    '      float sum = 0.0;',
+    '      for (int i = -1; i <= 1; i++) {',
+    '        for (int j = -1; j <= 1; j++) {',
+    '          float d = texture2D(uShadow, sc.xy + vec2(float(i), float(j)) * 0.000977).r;',
+    '          sum += step(sc.z - 0.007, d);',
+    '        }',
+    '      }',
+    '      lit = 0.35 + 0.65 * (sum / 9.0);',
+    '    }',
+    '  }',
+
+    '  float kd = max(dot(N, K), 0.0) * lit;',
+    '  float fd = max(dot(N, F), 0.0);',
+    '  float rd = max(dot(N, R), 0.0);',
+    '  vec3 H = normalize(K + V);',
+    '  float nh = max(dot(N, H), 0.0);',
+    '  float spec = pow(nh, 26.0) * 0.30 + pow(nh, 110.0) * 0.35;',
+    '  float fres = pow(1.0 - max(dot(N, V), 0.0), 2.6);',
+
+    /* 半球环境光：上方偏冷，下方偏暗 */
+    /* 岩石纹理：两级噪声改变反照率，再撒一点亮斑 */
+    '  float rock = vn(vW * 6.0) * 0.62 + vn(vW * 19.0) * 0.38;',
+    '  vec3 alb = vC * (0.78 + 0.44 * rock);',
+    '  float spk = step(0.90, vn(vW * 70.0));',
+    '  alb *= 1.0 + spk * 0.16;',
+
+    '  vec3 amb = mix(vec3(0.07, 0.08, 0.10), vec3(0.19, 0.20, 0.23), N.y * 0.5 + 0.5);',
+    '  vec3 col = alb * (amb * (0.55 + 0.45 * lit) + kd * 1.20);',
+    '  col += alb * vec3(0.30, 0.36, 0.48) * fd * 0.22;',
+    '  col += alb * vec3(0.55, 0.62, 0.78) * rd * 0.16;',
+    '  col += vec3(1.0, 0.94, 0.84) * spec * lit;',
+
+    /* 薄处透光：浅色颗粒被逆光照亮，像石英 */
+    '  float sss = pow(max(dot(-N, K), 0.0), 2.2) * smoothstep(0.55, 0.95, vC.r) * 0.35;',
+    '  col += vC * sss;',
+    '  col += vec3(0.36, 0.50, 0.80) * fres * 0.05;',
+
+    '  float g = smoothstep(-0.02, 0.55, vW.y);',
+    '  col *= 0.76 + 0.24 * g;',
+
+    '  float d = length(uEye - vW);',
+    '  float fog = smoothstep(19.0, 4.0, d) * 0.86 + 0.14;',
+    '  col *= fog;',
+
+    /* 扫描前沿的暖光 */
+    '  col = mix(col, vec3(1.0, 0.78, 0.46) * 1.5, band * 0.55);',
+
+    /* 隔离模式：只留下被选中的那颗 */
+    '  if (uFocus >= 0.0) {',
+    '    if (abs(vId - uFocus) < 0.5) col *= 1.35;',
+    '    else col *= 0.30;',
+    '  }',
+
+    /* 曝光 + ACES 近似 + 暗角 */
+    '  col *= 1.02;',
+    '  col = (col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14);',
+    '  vec2 uv = gl_FragCoord.xy / uRes;',
+    '  float vig = smoothstep(1.15, 0.35, length(uv - 0.5));',
+    '  col *= 0.82 + 0.18 * vig;',
+
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+    return s;
+  }
+  function program(vs, fs) {
+    var p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    return p;
+  }
+
+  var prog = program(VERT, FRAG);
+
+  /* ---------- 矩阵 ---------- */
+  function perspective(fovy, aspect, near, far) {
+    var f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+    return new Float32Array([
+      f / aspect, 0, 0, 0, 0, f, 0, 0,
+      0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0
+    ]);
+  }
+  function lookAt(eye, center, up) {
+    var zx = eye[0] - center[0], zy = eye[1] - center[1], zz = eye[2] - center[2];
+    var zl = Math.hypot(zx, zy, zz) || 1; zx /= zl; zy /= zl; zz /= zl;
+    var xx = up[1] * zz - up[2] * zy, xy = up[2] * zx - up[0] * zz, xz = up[0] * zy - up[1] * zx;
+    var xl = Math.hypot(xx, xy, xz) || 1; xx /= xl; xy /= xl; xz /= xl;
+    var yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+    return new Float32Array([
+      xx, yx, zx, 0, xy, yy, zy, 0, xz, yz, zz, 0,
+      -(xx * eye[0] + xy * eye[1] + xz * eye[2]),
+      -(yx * eye[0] + yy * eye[1] + yz * eye[2]),
+      -(zx * eye[0] + zy * eye[1] + zz * eye[2]), 1
+    ]);
+  }
+
+  function ortho(l, r, b, t, n, f) {
+    return new Float32Array([
+      2 / (r - l), 0, 0, 0,
+      0, 2 / (t - b), 0, 0,
+      0, 0, -2 / (f - n), 0,
+      -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1
+    ]);
+  }
+  function mul4(a, b) {
+    var o = new Float32Array(16);
+    for (var c = 0; c < 4; c++) {
+      for (var r2 = 0; r2 < 4; r2++) {
+        o[c * 4 + r2] = a[r2] * b[c * 4] + a[4 + r2] * b[c * 4 + 1] +
+                        a[8 + r2] * b[c * 4 + 2] + a[12 + r2] * b[c * 4 + 3];
+      }
+    }
+    return o;
+  }
+
+  /* ---------- 生成沙粒 ---------- */
+  var pos = [], nrm = [], col = [], ids = [], idx = [];
+  var pebbles = [];
+  var seed = 12345;
+  function rnd() { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; }
+
+  var PALETTE = [
+    [0.66, 0.63, 0.58], [0.80, 0.77, 0.70], [0.52, 0.50, 0.47],
+    [0.30, 0.29, 0.29], [0.88, 0.84, 0.76], [0.56, 0.48, 0.38],
+    [0.44, 0.36, 0.28], [0.70, 0.62, 0.50], [0.36, 0.35, 0.36],
+    [0.62, 0.55, 0.47]
+  ];
+  var NAMES = ['石英', '长石', '玄武岩碎屑', '火山玻璃', '岩屑'];
+
+  function h3(x, y, z) {
+    var v = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
+    return v - Math.floor(v);
+  }
+  function vn3(x, y, z) {
+    var ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+    var fx = x - ix, fy = y - iy, fz = z - iz;
+    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy); fz = fz * fz * (3 - 2 * fz);
+    var n000 = h3(ix, iy, iz), n100 = h3(ix + 1, iy, iz);
+    var n010 = h3(ix, iy + 1, iz), n110 = h3(ix + 1, iy + 1, iz);
+    var n001 = h3(ix, iy, iz + 1), n101 = h3(ix + 1, iy, iz + 1);
+    var n011 = h3(ix, iy + 1, iz + 1), n111 = h3(ix + 1, iy + 1, iz + 1);
+    var a = n000 + (n100 - n000) * fx, b = n010 + (n110 - n010) * fx;
+    var c = n001 + (n101 - n001) * fx, d = n011 + (n111 - n011) * fx;
+    var e = a + (b - a) * fy, f = c + (d - c) * fy;
+    return e + (f - e) * fz;
+  }
+
+  function addPebble(cx, cy, cz, r, color, flat, rot) {
+    var seg = SEG, rings = RINGS;
+    var id = pebbles.length;
+    pebbles.push({ x: cx, y: cy, z: cz, r: r, color: color, id: id });
+    var start = pos.length / 3;
+    var s1 = rnd() * 6.28, s2 = rnd() * 6.28;
+    var ax = 0.82 + rnd() * 0.36, az = 0.82 + rnd() * 0.36;
+    var cr = Math.cos(rot[0]), sr = Math.sin(rot[0]);
+    var cp = Math.cos(rot[1]), sp = Math.sin(rot[1]);
+    var cyw = Math.cos(rot[2]), syw = Math.sin(rot[2]);
+    for (var y = 0; y <= rings; y++) {
+      var phi = y / rings * Math.PI;
+      for (var x = 0; x <= seg; x++) {
+        var th = x / seg * Math.PI * 2;
+        var dx = Math.sin(phi) * Math.cos(th), dy = Math.cos(phi), dz = Math.sin(phi) * Math.sin(th);
+        var n1 = vn3(dx * 2.1 + s1, dy * 2.1 + s2, dz * 2.1 + s1);
+        var n2 = vn3(dx * 4.6 + s2, dy * 4.6 + s1, dz * 4.6 + s2);
+        var n3 = vn3(dx * 9.5 + s1, dy * 9.5 + s2, dz * 9.5 + s1);
+        var deform = 1 + (n1 - 0.5) * 0.42 + (n2 - 0.5) * 0.20 + (n3 - 0.5) * 0.08;
+        var rr = r * deform;
+        var px = dx * rr * ax;
+        var py = dy * rr * flat;
+        var pz = dz * rr * az;
+        var y1 = py * cr - pz * sr, z1 = py * sr + pz * cr;
+        var x2 = px * cp + z1 * sp, z2 = -px * sp + z1 * cp;
+        var x3 = x2 * cyw - y1 * syw, y3 = x2 * syw + y1 * cyw;
+        pos.push(cx + x3, cy + y3, cz + z2);
+        var shade = (0.9 + 0.2 * rnd()) * (0.80 + 0.40 * n1);
+        col.push(color[0] * shade, color[1] * shade, color[2] * shade);
+        nrm.push(0, 0, 0);
+        ids.push(id);
+      }
+    }
+    for (var y2 = 0; y2 < rings; y2++) {
+      for (var x2 = 0; x2 < seg; x2++) {
+        var a = start + y2 * (seg + 1) + x2, b = a + 1, c = a + seg + 1, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+    }
+  }
+
+  var count = 0;
+  for (var i = 0; i < 900; i++) {
+    var ang = rnd() * Math.PI * 2;
+    var rad = Math.pow(rnd(), 0.55) * 4.4;
+    var r = 0.035 + Math.pow(rnd(), 2.2) * 0.17;
+    var cx = Math.cos(ang) * rad, cz = Math.sin(ang) * rad;
+    var color = PALETTE[(rnd() * PALETTE.length) | 0];
+    addPebble(cx, r * 0.36, cz, r, color, 0.55 + rnd() * 0.35,
+      [rnd() * 6.28, rnd() * 6.28, rnd() * 6.28]);
+    count++;
+  }
+  var HERO = [
+    [1.5, 0.3, 0.6, 0.30], [-1.7, 0.28, -0.7, 0.26], [2.35, 0.22, -1.7, 0.22]
+  ];
+  for (var h = 0; h < HERO.length; h++) {
+    addPebble(HERO[h][0], HERO[h][1], HERO[h][2], HERO[h][3],
+      PALETTE[(h * 3) % PALETTE.length], 0.68, [rnd() * 6.28, rnd() * 6.28, rnd() * 6.28]);
+    count++;
+  }
+
+  /* 面法线累加 */
+  var vcount = pos.length / 3;
+  var nx = new Float32Array(vcount), ny = new Float32Array(vcount), nz = new Float32Array(vcount);
+  for (var t = 0; t < idx.length; t += 3) {
+    var a0 = idx[t] * 3, b0 = idx[t + 1] * 3, c0 = idx[t + 2] * 3;
+    var e1x = pos[b0] - pos[a0], e1y = pos[b0 + 1] - pos[a0 + 1], e1z = pos[b0 + 2] - pos[a0 + 2];
+    var e2x = pos[c0] - pos[a0], e2y = pos[c0 + 1] - pos[a0 + 1], e2z = pos[c0 + 2] - pos[a0 + 2];
+    var fx = e1y * e2z - e1z * e2y, fy = e1z * e2x - e1x * e2z, fz = e1x * e2y - e1y * e2x;
+    nx[idx[t]] += fx; ny[idx[t]] += fy; nz[idx[t]] += fz;
+    nx[idx[t + 1]] += fx; ny[idx[t + 1]] += fy; nz[idx[t + 1]] += fz;
+    nx[idx[t + 2]] += fx; ny[idx[t + 2]] += fy; nz[idx[t + 2]] += fz;
+  }
+  var nrmArr = new Float32Array(vcount * 3);
+  for (var v = 0; v < vcount; v++) {
+    var l = Math.hypot(nx[v], ny[v], nz[v]) || 1;
+    nrmArr[v * 3] = nx[v] / l; nrmArr[v * 3 + 1] = ny[v] / l; nrmArr[v * 3 + 2] = nz[v] / l;
+  }
+
+  function buf(arr, target) {
+    var b = gl.createBuffer();
+    gl.bindBuffer(target || gl.ARRAY_BUFFER, b);
+    gl.bufferData(target || gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW);
+    return b;
+  }
+  document.getElementById('rc').textContent = String(pebbles.length);
+  var pbuf = buf(new Float32Array(pos));
+  var nbuf = buf(nrmArr);
+  var cbuf = buf(new Float32Array(col));
+  var ibufAttr = buf(new Float32Array(ids));
+  var ibuf = buf(isGL2 ? new Uint32Array(idx) : new Uint16Array(idx), gl.ELEMENT_ARRAY_BUFFER);
+
+  /* ---------- 阴影贴图 ---------- */
+  var SHADOW_SIZE = 1024;
+  var shadowOn = isGL2;
+  var shadowTex = null, shadowFbo = null, progShadow = null, shLightVP = null, shPos = -1;
+  var lightVP = mul4(ortho(-7, 7, -7, 7, 0.5, 32),
+    lookAt([-0.55 * 14, 0.9 * 14, 0.45 * 14], [0, 0, 0], [0, 1, 0]));
+  if (shadowOn) {
+    shadowTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, shadowTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, SHADOW_SIZE, SHADOW_SIZE,
+      0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    shadowFbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, shadowTex, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) shadowOn = false;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    progShadow = program(
+      'attribute vec3 aPos; uniform mat4 uLightVP; void main(){ gl_Position = uLightVP * vec4(aPos, 1.0); }',
+      'precision mediump float; void main(){ gl_FragColor = vec4(1.0); }');
+    shLightVP = gl.getUniformLocation(progShadow, 'uLightVP');
+    shPos = gl.getAttribLocation(progShadow, 'aPos');
+  }
+  var fallbackTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, fallbackTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+    new Uint8Array([255, 255, 255, 255]));
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+  /* ---------- 网格台面 ---------- */
+  var TRAY_V = [
+    'attribute vec3 aPos;',
+    'uniform mat4 uProj;',
+    'uniform mat4 uView;',
+    'varying vec3 vW;',
+    'void main(){ vW = aPos; gl_Position = uProj * uView * vec4(aPos, 1.0); }'
+  ].join('\n');
+  var TRAY_F = [
+    'precision mediump float;',
+    'varying vec3 vW;',
+    'uniform float uScan;',
+    'void main(){',
+    '  if (vW.x > uScan) discard;',
+    '  float r = length(vW.xz);',
+    '  vec2 q = vW.xz * 1.6;',
+    '  vec2 f = abs(fract(q) - 0.5);',
+    '  float w = 0.012 + 0.02 * r;',
+    '  float line = smoothstep(0.5 - w, 0.5, max(f.x, f.y));',
+    '  float fade = smoothstep(6.4, 1.0, r);',
+    '  vec3 base = mix(vec3(0.055, 0.062, 0.075), vec3(0.008, 0.009, 0.014), smoothstep(0.8, 6.2, r));',
+    '  vec3 c = base + vec3(0.42, 0.60, 0.72) * line * 0.13 * fade;',
+    '  gl_FragColor = vec4(c, 1.0);',
+    '}'
+  ].join('\n');
+  var progTray = program(TRAY_V, TRAY_F);
+  var trayPos = [0, -0.12, 0], trayIdx = [];
+  for (var ti = 0; ti <= 96; ti++) {
+    var ta = ti / 96 * Math.PI * 2;
+    trayPos.push(Math.cos(ta) * 6.4, -0.12, Math.sin(ta) * 6.4);
+    if (ti > 0) trayIdx.push(0, ti, ti + 1);
+  }
+  var trayBuf = buf(new Float32Array(trayPos));
+  var trayIBuf = buf(new Uint16Array(trayIdx), gl.ELEMENT_ARRAY_BUFFER);
+
+  /* ---------- 浮尘 ---------- */
+  var dustPos = [], dustSize = [];
+  for (var d = 0; d < 220; d++) {
+    dustPos.push((rnd() * 2 - 1) * 5.2, rnd() * 3.4, (rnd() * 2 - 1) * 5.2);
+    dustSize.push(0.6 + rnd() * 1.6);
+  }
+  var DUST_V = [
+    'attribute vec3 aPos;',
+    'attribute float aS;',
+    'uniform mat4 uProj;',
+    'uniform mat4 uView;',
+    'uniform float uTime;',
+    'uniform float uDpr;',
+    'varying float vB;',
+    'void main(){',
+    '  vec3 p = aPos;',
+    '  p.y = mod(p.y + uTime * 0.07, 3.4);',
+    '  p.x += sin(uTime * 0.17 + aPos.z) * 0.16;',
+    '  vec4 vp = uView * vec4(p, 1.0);',
+    '  gl_PointSize = clamp(aS * (95.0 / max(0.6, -vp.z)) * uDpr, 1.0, 4.0);',
+    '  vB = 0.10 + 0.18 * (0.5 + 0.5 * sin(uTime * 0.9 + aPos.x * 2.7));',
+    '  gl_Position = uProj * vp;',
+    '}'
+  ].join('\n');
+  var DUST_F = [
+    'precision mediump float;',
+    'varying float vB;',
+    'void main(){',
+    '  float d = length(gl_PointCoord - vec2(0.5));',
+    '  float a = smoothstep(0.5, 0.0, d);',
+    '  gl_FragColor = vec4(vec3(0.86, 0.78, 0.64), a * vB);',
+    '}'
+  ].join('\n');
+  var progDust = program(DUST_V, DUST_F);
+  var dustBuf = buf(new Float32Array(dustPos));
+  var dustSzBuf = buf(new Float32Array(dustSize));
+
+  /* ---------- 相机与交互 ---------- */
+  var cam = { th: 0.7, ph: 0.42, dist: 7.4, tth: 0.7, tph: 0.42, tdist: 7.4,
+              tx: 0, ty: 0.15, tz: 0, ttx: 0, tty: 0.15, ttz: 0 };
+  var drag = null, moved = 0, hover = null, focusId = -1;
+  var camEye = [0, 0, 7], camTarget = [0, 0.15, 0], camBasis = null;
+  var scanX = -7.2, scanning = true, scanDelay = 0.6, scanClock = 0;
+
+  var tip = document.getElementById('tip');
+  var tipName = document.getElementById('tipName');
+  var tipMeta = document.getElementById('tipMeta');
+  var svg = document.getElementById('leaders');
+  var leader = svg.querySelector('line');
+  var ring = svg.querySelector('circle');
+  var tagEl = document.getElementById('tag');
+  var scanState = document.getElementById('scanState');
+  scanState.textContent = 'SCANNING';
+
+  function pointerPos(e) { return { x: e.clientX, y: e.clientY }; }
+
+  canvas.addEventListener('pointerdown', function (e) {
+    drag = { x: e.clientX, y: e.clientY };
+    moved = 0;
+    canvas.classList.add('drag');
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (!drag) { updateHover(e.clientX, e.clientY); return; }
+    var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    moved += Math.abs(dx) + Math.abs(dy);
+    drag.x = e.clientX; drag.y = e.clientY;
+    cam.tth -= dx * 0.006;
+    cam.tph = Math.max(-0.15, Math.min(1.25, cam.tph + dy * 0.004));
+  });
+  function endDrag(e) {
+    if (drag && moved < 7) {
+      if (hover) { focus(hover); }
+      else if (focusId >= 0) { clearFocus(); }
+    }
+    drag = null;
+    canvas.classList.remove('drag');
+  }
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', function () {
+    drag = null; canvas.classList.remove('drag');
+  });
+  canvas.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    cam.tdist = Math.max(2.2, Math.min(12, cam.tdist * Math.exp(e.deltaY * 0.0012)));
+  }, { passive: false });
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') clearFocus();
+    if (e.key === 'r' || e.key === 'R') rescan();
+  });
+  document.getElementById('rescan').addEventListener('click', rescan);
+  document.getElementById('back').addEventListener('click', function () {
+    if (window.parent !== window) window.parent.postMessage({ type: 'recon-close' }, '*');
+    else history.back();
+  });
+
+  function rescan() {
+    scanX = -7.2; scanning = true; scanClock = 0;
+    scanState.textContent = 'SCANNING';
+  }
+
+  function describe(p) {
+    var c = p.color;
+    var name = NAMES[p.id % NAMES.length];
+    if (c[0] > 0.78 && Math.abs(c[0] - c[2]) < 0.1) name = '石英';
+    else if (c[0] < 0.38) name = '玄武岩碎屑';
+    else if (c[0] - c[2] > 0.12) name = '长石';
+    var mm = (p.r * 4.2).toFixed(2);
+    var ang = (0.45 + (p.id * 0.37 % 0.5)).toFixed(2);
+    return { name: name, size: mm + ' mm', angle: ang };
+  }
+
+  function focus(p) {
+    focusId = p.id;
+    cam.ttx = p.x; cam.tty = p.y; cam.ttz = p.z;
+    cam.tdist = 6.4;
+    cam.tph = Math.max(cam.tph, 0.5);
+  }
+  function clearFocus() {
+    focusId = -1;
+    cam.ttx = 0; cam.tty = 0.15; cam.ttz = 0;
+    cam.tdist = 7.4;
+  }
+
+  /* 拾取 */
+  function pick(mx, my) {
+    if (!camBasis) return null;
+    var W = innerWidth, H = innerHeight;
+    var nx2 = (mx / W) * 2 - 1;
+    var ny2 = 1 - (my / H) * 2;
+    var tanF = Math.tan(25 * Math.PI / 180);
+    var aspect = W / H;
+    var d = [
+      camBasis.f[0] + camBasis.r[0] * nx2 * tanF * aspect + camBasis.u[0] * ny2 * tanF,
+      camBasis.f[1] + camBasis.r[1] * nx2 * tanF * aspect + camBasis.u[1] * ny2 * tanF,
+      camBasis.f[2] + camBasis.r[2] * nx2 * tanF * aspect + camBasis.u[2] * ny2 * tanF
+    ];
+    var dl = Math.hypot(d[0], d[1], d[2]) || 1;
+    d[0] /= dl; d[1] /= dl; d[2] /= dl;
+    var best = null, bestT = 1e9;
+    var ox = camEye[0], oy = camEye[1], oz = camEye[2];
+    for (var i = 0; i < pebbles.length; i++) {
+      var p = pebbles[i];
+      var lx = ox - p.x, ly = oy - p.y, lz = oz - p.z;
+      var b = lx * d[0] + ly * d[1] + lz * d[2];
+      var c = lx * lx + ly * ly + lz * lz - p.r * p.r * 1.15;
+      var disc = b * b - c;
+      if (disc < 0) continue;
+      var tHit = -b - Math.sqrt(disc);
+      if (tHit > 0 && tHit < bestT) { bestT = tHit; best = p; }
+    }
+    return best;
+  }
+
+  function updateHover(mx, my) {
+    var p = pick(mx, my);
+    hover = p;
+    if (!p) {
+      if (focusId < 0) tip.style.opacity = '0';
+      tagEl.style.opacity = '0';
+      return;
+    }
+    var info = describe(p);
+    tipName.textContent = info.name;
+    tipMeta.innerHTML = '<span class="n">' + info.size + '</span> · 棱角 ' + info.angle;
+    tip.style.left = Math.min(innerWidth - 150, mx) + 'px';
+    tip.style.top = my + 'px';
+    tip.style.opacity = '1';
+    tagEl.style.left = mx + 'px';
+    tagEl.style.top = (my + 34) + 'px';
+    tagEl.textContent = 'ID ' + String(p.id).padStart(3, '0');
+    tagEl.style.opacity = '0.75';
+  }
+
+  /* 投影 */
+  function project(p, view, proj, W, H) {
+    var vx = view[0] * p[0] + view[4] * p[1] + view[8] * p[2] + view[12];
+    var vy = view[1] * p[0] + view[5] * p[1] + view[9] * p[2] + view[13];
+    var vz = view[2] * p[0] + view[6] * p[1] + view[10] * p[2] + view[14];
+    var cx = proj[0] * vx + proj[4] * vy + proj[8] * vz + proj[12];
+    var cy = proj[1] * vx + proj[5] * vy + proj[9] * vz + proj[13];
+    var cw = proj[3] * vx + proj[7] * vy + proj[11] * vz + proj[15];
+    if (cw <= 0.0001) return null;
+    return [(cx / cw * 0.5 + 0.5) * W, (1 - (cy / cw * 0.5 + 0.5)) * H];
+  }
+
+  function resize() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(innerWidth * dpr);
+    canvas.height = Math.floor(innerHeight * dpr);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var last = 0;
+  var uniforms = {
+    proj: gl.getUniformLocation(prog, 'uProj'),
+    view: gl.getUniformLocation(prog, 'uView'),
+    eye: gl.getUniformLocation(prog, 'uEye'),
+    key: gl.getUniformLocation(prog, 'uKey'),
+    fill: gl.getUniformLocation(prog, 'uFill'),
+    scan: gl.getUniformLocation(prog, 'uScan'),
+    focus: gl.getUniformLocation(prog, 'uFocus'),
+    rim: gl.getUniformLocation(prog, 'uRim'),
+    res: gl.getUniformLocation(prog, 'uRes'),
+    shadow: gl.getUniformLocation(prog, 'uShadow'),
+    lightVP: gl.getUniformLocation(prog, 'uLightVP'),
+    shadowOn: gl.getUniformLocation(prog, 'uShadowOn')
+  };
+  var trayU = {
+    proj: gl.getUniformLocation(progTray, 'uProj'),
+    view: gl.getUniformLocation(progTray, 'uView'),
+    scan: gl.getUniformLocation(progTray, 'uScan')
+  };
+  var dustU = {
+    proj: gl.getUniformLocation(progDust, 'uProj'),
+    view: gl.getUniformLocation(progDust, 'uView'),
+    time: gl.getUniformLocation(progDust, 'uTime'),
+    dpr: gl.getUniformLocation(progDust, 'uDpr')
+  };
+
+  function frame(ts) {
+    var dt = Math.min(0.05, (ts - last) / 1000 || 0.016);
+    last = ts;
+
+    /* 扫描进度 */
+    if (scanning) {
+      scanClock += dt;
+      if (scanClock > scanDelay) {
+        scanX += dt * 5.6;
+        if (scanX > 7.4) { scanX = 7.4; scanning = false; scanState.textContent = 'COMPLETE'; }
+      }
+    }
+
+    if (!drag) cam.tth += dt * 0.045;
+    cam.th += (cam.tth - cam.th) * 0.08;
+    cam.ph += (cam.tph - cam.ph) * 0.08;
+    cam.dist += (cam.tdist - cam.dist) * 0.07;
+    cam.tx += (cam.ttx - cam.tx) * 0.08;
+    cam.ty += (cam.tty - cam.ty) * 0.08;
+    cam.tz += (cam.ttz - cam.tz) * 0.08;
+
+    var target = [cam.tx, cam.ty + 0.1, cam.tz];
+    var cp = Math.cos(cam.ph), sp = Math.sin(cam.ph);
+    var eye = [
+      target[0] + Math.sin(cam.th) * cp * cam.dist,
+      target[1] + sp * cam.dist,
+      target[2] + Math.cos(cam.th) * cp * cam.dist
+    ];
+    camEye = eye; camTarget = target;
+
+    var view = lookAt(eye, target, [0, 1, 0]);
+    var proj = perspective(50 * Math.PI / 180, canvas.width / canvas.height, 0.05, 90);
+
+    /* 相机基向量，供拾取用 */
+    var f = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+    var fl = Math.hypot(f[0], f[1], f[2]) || 1; f = [f[0] / fl, f[1] / fl, f[2] / fl];
+    var r = [f[2], 0, -f[0]];
+    var rl = Math.hypot(r[0], r[1], r[2]) || 1; r = [r[0] / rl, r[1] / rl, r[2] / rl];
+    var u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+    camBasis = { f: f, r: r, u: u };
+
+    /* 阴影 pass：只写深度 */
+    if (shadowOn) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFbo);
+      gl.viewport(0, 0, SHADOW_SIZE, SHADOW_SIZE);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
+      gl.useProgram(progShadow);
+      gl.uniformMatrix4fv(shLightVP, false, lightVP);
+      gl.bindBuffer(gl.ARRAY_BUFFER, pbuf);
+      gl.enableVertexAttribArray(shPos);
+      gl.vertexAttribPointer(shPos, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibuf);
+      gl.drawElements(gl.TRIANGLES, idx.length, IDX_TYPE, 0);
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0.02, 0.024, 0.04, 1);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    /* 台面 */
+    gl.useProgram(progTray);
+    gl.uniformMatrix4fv(trayU.proj, false, proj);
+    gl.uniformMatrix4fv(trayU.view, false, view);
+    gl.uniform1f(trayU.scan, scanX);
+    gl.bindBuffer(gl.ARRAY_BUFFER, trayBuf);
+    var trayA = gl.getAttribLocation(progTray, 'aPos');
+    gl.enableVertexAttribArray(trayA);
+    gl.vertexAttribPointer(trayA, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, trayIBuf);
+    gl.drawElements(gl.TRIANGLES, trayIdx.length, gl.UNSIGNED_SHORT, 0);
+
+    /* 沙粒 */
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(uniforms.proj, false, proj);
+    gl.uniformMatrix4fv(uniforms.view, false, view);
+    gl.uniform3f(uniforms.eye, eye[0], eye[1], eye[2]);
+    gl.uniform3f(uniforms.key, -0.55, 0.9, 0.45);
+    gl.uniform3f(uniforms.fill, 0.7, 0.15, -0.8);
+    gl.uniform1f(uniforms.scan, scanX);
+    gl.uniform1f(uniforms.focus, focusId);
+    gl.uniform3f(uniforms.rim, 0.25, 0.35, -0.9);
+    gl.uniform2f(uniforms.res, canvas.width, canvas.height);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, shadowOn ? shadowTex : fallbackTex);
+    gl.uniform1i(uniforms.shadow, 0);
+    gl.uniformMatrix4fv(uniforms.lightVP, false, lightVP);
+    gl.uniform1f(uniforms.shadowOn, shadowOn ? 1 : 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, pbuf);
+    var aPos = gl.getAttribLocation(prog, 'aPos');
+    var aNorm = gl.getAttribLocation(prog, 'aNorm');
+    var aCol = gl.getAttribLocation(prog, 'aCol');
+    var aId = gl.getAttribLocation(prog, 'aId');
+    gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, nbuf);
+    gl.enableVertexAttribArray(aNorm); gl.vertexAttribPointer(aNorm, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, cbuf);
+    gl.enableVertexAttribArray(aCol); gl.vertexAttribPointer(aCol, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, ibufAttr);
+    gl.enableVertexAttribArray(aId); gl.vertexAttribPointer(aId, 1, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibuf);
+    gl.drawElements(gl.TRIANGLES, idx.length, IDX_TYPE, 0);
+
+    /* 浮尘 */
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+    gl.depthMask(false);
+    gl.useProgram(progDust);
+    gl.uniformMatrix4fv(dustU.proj, false, proj);
+    gl.uniformMatrix4fv(dustU.view, false, view);
+    gl.uniform1f(dustU.time, ts * 0.001);
+    gl.uniform1f(dustU.dpr, Math.min(devicePixelRatio || 1, 2));
+    gl.bindBuffer(gl.ARRAY_BUFFER, dustBuf);
+    var dA = gl.getAttribLocation(progDust, 'aPos');
+    var dS = gl.getAttribLocation(progDust, 'aS');
+    gl.enableVertexAttribArray(dA); gl.vertexAttribPointer(dA, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, dustSzBuf);
+    gl.enableVertexAttribArray(dS); gl.vertexAttribPointer(dS, 1, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.POINTS, 0, 220);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+
+    /* 引线：跟随悬停/选中的颗粒 */
+    var showP = focusId >= 0 ? pebbles[focusId] : hover;
+    if (showP) {
+      var sp2 = project([showP.x, showP.y, showP.z], view, proj, innerWidth, innerHeight);
+      if (sp2) {
+        var useFocus = focusId >= 0;
+        leader.setAttribute('x1', sp2[0]); leader.setAttribute('y1', sp2[1]);
+        leader.setAttribute('x2', sp2[0] + 38); leader.setAttribute('y2', sp2[1] - 38);
+        ring.setAttribute('cx', sp2[0]); ring.setAttribute('cy', sp2[1]);
+        ring.setAttribute('r', String(Math.max(10, showP.r * 42)));
+        if (useFocus) {
+          var info2 = describe(showP);
+          tipName.textContent = info2.name;
+          tipMeta.innerHTML = '<span class="n">' + info2.size + '</span> · 棱角 ' + info2.angle;
+          tip.style.left = Math.min(innerWidth - 150, sp2[0] + 44) + 'px';
+          tip.style.top = (sp2[1] - 40) + 'px';
+          tip.style.opacity = '1';
+          tagEl.style.left = sp2[0] + 'px';
+          tagEl.style.top = (sp2[1] + 26) + 'px';
+          tagEl.textContent = 'SAMPLE ' + String(showP.id).padStart(3, '0');
+          tagEl.style.opacity = '0.8';
+        }
+      }
+    } else {
+      leader.setAttribute('x1', -10); leader.setAttribute('y1', -10);
+      leader.setAttribute('x2', -10); leader.setAttribute('y2', -10);
+      ring.setAttribute('cx', -10); ring.setAttribute('cy', -10);
+    }
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>重建 · 一页纸的宇宙</title>
+<style>
+  :root{
+    --ink:#eeebe4; --muted:rgba(238,235,228,.56); --faint:rgba(238,235,228,.3);
+    --sand:#d8b98c;
+    --serif:"Songti SC","Source Han Serif SC","Noto Serif SC","SimSun","STSong",Georgia,serif;
+    --mono:"SF Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:#05060a;color:var(--ink);overflow:hidden;
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif}
+  #gl{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:grab}
+  #gl.drag{cursor:grabbing}
+  .top{position:fixed;left:34px;top:30px;pointer-events:none;z-index:5}
+  .top .k{font:10px/1 var(--mono);letter-spacing:.42em;color:var(--faint)}
+  .top h1{font-family:var(--serif);font-weight:600;font-size:34px;letter-spacing:.12em;margin:14px 0 8px}
+  .top .sub{font-size:12px;line-height:1.7;color:var(--muted);max-width:420px}
+  .top .sub b{color:var(--sand);font-weight:500}
+  .hint{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);
+    font:11px/1 var(--mono);letter-spacing:.16em;color:var(--faint);pointer-events:none;z-index:5}
+  .frame{position:fixed;inset:4%;pointer-events:none;opacity:.4;z-index:4}
+  .frame i{position:absolute;width:18px;height:18px;border:0 solid rgba(216,185,140,.5)}
+  .frame .tl{left:0;top:0;border-left-width:1px;border-top-width:1px}
+  .frame .tr{right:0;top:0;border-right-width:1px;border-top-width:1px}
+  .frame .bl{left:0;bottom:0;border-left-width:1px;border-bottom-width:1px}
+  .frame .br{right:0;bottom:0;border-right-width:1px;border-bottom-width:1px}
+  .readout{position:fixed;right:34px;top:32px;text-align:right;
+    font:10px/1.9 var(--mono);letter-spacing:.14em;color:var(--faint);z-index:5}
+  .readout b{color:var(--sand);font-weight:400}
+  .back{position:fixed;left:34px;bottom:26px;z-index:6;
+    font:11px/1 var(--mono);letter-spacing:.16em;color:var(--muted);
+    background:none;border:1px solid rgba(238,235,228,.18);padding:8px 12px;cursor:pointer}
+  .back:hover{color:var(--ink);border-color:rgba(238,235,228,.4)}
+  .badge{position:fixed;right:34px;bottom:26px;z-index:5;pointer-events:none;
+    font:10px/1 var(--mono);letter-spacing:.28em;color:rgba(216,185,140,.55)}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div class="frame"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i></div>
+<header class="top">
+  <div class="k" id="kicker">RECONSTRUCTED · 02</div>
+  <h1 id="title">沙丘与海岸</h1>
+  <div class="sub" id="sub">由噪声生成的地形 · 不是照片</div>
+</header>
+<div class="readout">
+  <div>OBJECTS <b id="rc">—</b></div>
+  <div>MODE <b>PROCEDURAL</b></div>
+</div>
+<div class="hint">拖动环绕 · 滚轮缩放</div>
+<div class="badge">SIMULATION</div>
+<button class="back" id="back">← 返回尺度轴</button>
+
+<script>
+(function () {
+  'use strict';
+  var canvas = document.getElementById('gl');
+  var gl = canvas.getContext('webgl2', { antialias: true, alpha: false }) ||
+           canvas.getContext('webgl', { antialias: true, alpha: false });
+  var isGL2 = !!(window.WebGL2RenderingContext && gl instanceof WebGL2RenderingContext);
+  var KEY = (location.hash || '#dunes').slice(1);
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+    return s;
+  }
+  function program(vs, fs) {
+    var p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    return p;
+  }
+  function buf(arr, target) {
+    var b = gl.createBuffer();
+    var t = target || gl.ARRAY_BUFFER;
+    gl.bindBuffer(t, b);
+    gl.bufferData(t, arr, gl.STATIC_DRAW);
+    return b;
+  }
+
+  /* ---------- 矩阵 ---------- */
+  function perspective(fovy, aspect, near, far) {
+    var f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+    return new Float32Array([
+      f / aspect, 0, 0, 0, 0, f, 0, 0,
+      0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0
+    ]);
+  }
+  function lookAt(eye, center, up) {
+    var zx = eye[0] - center[0], zy = eye[1] - center[1], zz = eye[2] - center[2];
+    var zl = Math.hypot(zx, zy, zz) || 1; zx /= zl; zy /= zl; zz /= zl;
+    var xx = up[1] * zz - up[2] * zy, xy = up[2] * zx - up[0] * zz, xz = up[0] * zy - up[1] * zx;
+    var xl = Math.hypot(xx, xy, xz) || 1; xx /= xl; xy /= xl; xz /= xl;
+    var yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+    return new Float32Array([
+      xx, yx, zx, 0, xy, yy, zy, 0, xz, yz, zz, 0,
+      -(xx * eye[0] + xy * eye[1] + xz * eye[2]),
+      -(yx * eye[0] + yy * eye[1] + yz * eye[2]),
+      -(zx * eye[0] + zy * eye[1] + zz * eye[2]), 1
+    ]);
+  }
+
+  /* ---------- 噪声 ---------- */
+  function hash2(x, y) {
+    var v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+    return v - Math.floor(v);
+  }
+  function noise2(x, y) {
+    var ix = Math.floor(x), iy = Math.floor(y);
+    var fx = x - ix, fy = y - iy;
+    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    var a = hash2(ix, iy), b = hash2(ix + 1, iy);
+    var c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
+    var e = a + (b - a) * fx, f = c + (d - c) * fx;
+    return e + (f - e) * fy;
+  }
+  function sstep(a, b, x) {
+    var t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  }
+  function fbm(x, y, oct) {
+    var v = 0, amp = 0.5, fx = x, fy = y;
+    for (var i = 0; i < oct; i++) {
+      v += amp * noise2(fx, fy);
+      fx *= 2.03; fy *= 2.01; amp *= 0.5;
+    }
+    return v;
+  }
+
+  /* ---------- 场景描述 ---------- */
+  var SCENES = {
+    dunes: {
+      kicker: 'RECONSTRUCTED · 02', title: '沙丘与海岸',
+      sub: '由多层噪声生成的地形与沙脊 · <b>不是照片</b>',
+      cam: { th: 0.7, ph: 0.72, dist: 19, tx: 0, ty: 0.2, tz: 0 }
+    },
+    city: {
+      kicker: 'RECONSTRUCTED · 03', title: '城市夜色',
+      sub: '程序化路网与楼体，窗格灯光由算法点亮 · <b>不是照片</b>',
+      cam: { th: 0.85, ph: 0.55, dist: 14, tx: 0, ty: 0.6, tz: 0 }
+    },
+    stars: {
+      kicker: 'RECONSTRUCTED · 08', title: '恒星的世界',
+      sub: '按密度函数生成的球状星团，四万颗恒星 · <b>不是照片</b>',
+      cam: { th: 0.6, ph: 0.2, dist: 26, tx: 0, ty: 0, tz: 0 }
+    },
+    web: {
+      kicker: 'RECONSTRUCTED · 10', title: '宇宙网',
+      sub: '节点与纤维构成的宇宙大尺度结构 · <b>不是照片</b>',
+      cam: { th: 0.4, ph: 0.35, dist: 26, tx: 0, ty: 0, tz: 0 }
+    }
+  };
+  var meta = SCENES[KEY] || SCENES.dunes;
+  document.getElementById('kicker').textContent = meta.kicker;
+  document.getElementById('title').textContent = meta.title;
+  document.getElementById('sub').innerHTML = meta.sub;
+  document.title = meta.title + ' · 重建';
+
+  /* ---------- 通用光照着色器（地形/城市） ---------- */
+  var SOLID_V = [
+    'attribute vec3 aPos;',
+    'attribute vec3 aNorm;',
+    'attribute vec3 aCol;',
+    'uniform mat4 uProj;',
+    'uniform mat4 uView;',
+    'varying vec3 vN; varying vec3 vC; varying vec3 vW;',
+    'void main(){',
+    '  vN = aNorm; vC = aCol; vW = aPos;',
+    '  gl_Position = uProj * uView * vec4(aPos, 1.0);',
+    '}'
+  ].join('\n');
+
+  var SOLID_F = [
+    'precision highp float;',
+    'varying vec3 vN; varying vec3 vC; varying vec3 vW;',
+    'uniform vec3 uEye; uniform vec3 uKey;',
+    'uniform float uFogNear; uniform float uFogFar;',
+    'uniform float uWindow;',
+    'float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }',
+    'float vn(vec2 p){',
+    '  vec2 i = floor(p), f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i), b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0)), d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    'void main(){',
+    '  vec3 N = normalize(vN);',
+    '  vec3 V = normalize(uEye - vW);',
+    '  vec3 K = normalize(uKey);',
+    '  float kd = max(dot(N, K), 0.0);',
+    '  float up = max(N.y, 0.0);',
+    '  vec3 amb = mix(vec3(0.055, 0.06, 0.07), vec3(0.17, 0.18, 0.2), up);',
+    '  vec3 col = vC * (amb + kd * 1.15);',
+    /* 地形细节：风纹 + 边缘淡出，避免露出方形切边 */
+    '  if (uWindow < 0.5) {',
+    '    float rip = vn(vW.xz * 9.0) * 0.6 + vn(vW.xz * 26.0) * 0.4;',
+    '    col *= 0.86 + 0.26 * rip;',
+    '    float edge = smoothstep(7.8, 6.0, max(abs(vW.x), abs(vW.z)));',
+    '    col *= edge;',
+    '  }',
+    /* 海面：深色 + 高光 */
+    '  if (uWindow > 1.5) {',
+    '    vec3 Hw = normalize(K + V);',
+    '    float sw = pow(max(dot(N, Hw), 0.0), 90.0);',
+    '    col = vC * (amb + kd * 0.5) + vec3(0.55, 0.70, 0.90) * sw * 1.3;',
+    '  }',
+    /* 城市：立面上的窗格灯光 */
+    '  if (uWindow > 0.5) {',
+    '    float side = 1.0 - step(0.55, abs(N.y));',
+    '    vec2 g = vec2(vW.x + vW.z, vW.y) * vec2(5.0, 7.0);',
+    '    vec2 cell = fract(g);',
+    '    vec2 id = floor(g);',
+    '    float lit = step(0.62, hash(id + floor(vW.xz * 0.5)));',
+    '    float win = step(0.18, cell.x) * step(cell.x, 0.82) * step(0.22, cell.y) * step(cell.y, 0.78);',
+    '    float warm = 0.75 + 0.25 * hash(id * 1.7);',
+    '    col += vec3(1.0, 0.72 * warm, 0.38) * win * side * lit * 1.15;',
+    '  }',
+    '  float d = length(uEye - vW);',
+    '  float fog = smoothstep(uFogFar, uFogNear, d);',
+    '  col = mix(vec3(0.01, 0.014, 0.022), col, fog);',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  /* ---------- 点精灵 ---------- */
+  var POINT_V = [
+    'attribute vec3 aPos;',
+    'attribute float aS;',
+    'attribute vec3 aCol;',
+    'attribute float aB;',
+    'uniform mat4 uProj; uniform mat4 uView;',
+    'uniform float uDpr; uniform float uTime;',
+    'varying vec3 vC; varying float vB;',
+    'void main(){',
+    '  vec4 vp = uView * vec4(aPos, 1.0);',
+    '  gl_PointSize = clamp(aS * (160.0 / max(0.5, -vp.z)) * uDpr, 1.0, 64.0);',
+    '  vC = aCol;',
+    '  vB = aB * (0.85 + 0.15 * sin(uTime * 1.3 + aPos.x * 9.0 + aPos.y * 5.0));',
+    '  gl_Position = uProj * vp;',
+    '}'
+  ].join('\n');
+  var POINT_F = [
+    'precision mediump float;',
+    'varying vec3 vC; varying float vB;',
+    'void main(){',
+    '  vec2 q = gl_PointCoord - vec2(0.5);',
+    '  float d = length(q);',
+    '  float core = smoothstep(0.5, 0.0, d);',
+    '  float halo = smoothstep(0.5, 0.15, d) * 0.35;',
+    '  gl_FragColor = vec4(vC, (core + halo) * vB);',
+    '}'
+  ].join('\n');
+
+  /* ---------- 线 ---------- */
+  var LINE_V = [
+    'attribute vec3 aPos;',
+    'attribute vec3 aCol;',
+    'uniform mat4 uProj; uniform mat4 uView;',
+    'varying vec3 vC;',
+    'void main(){ vC = aCol; gl_Position = uProj * uView * vec4(aPos, 1.0); }'
+  ].join('\n');
+  var LINE_F = [
+    'precision mediump float;',
+    'varying vec3 vC;',
+    'void main(){ gl_FragColor = vec4(vC, 0.5); }'
+  ].join('\n');
+
+  var progSolid = program(SOLID_V, SOLID_F);
+  var progPoint = program(POINT_V, POINT_F);
+  var progLine = program(LINE_V, LINE_F);
+
+  function locs(p, names) {
+    var o = {};
+    names.forEach(function (n) { o[n] = gl.getUniformLocation(p, n); });
+    return o;
+  }
+  var uS = locs(progSolid, ['uProj', 'uView', 'uEye', 'uKey', 'uFogNear', 'uFogFar', 'uWindow']);
+  var uP = locs(progPoint, ['uProj', 'uView', 'uDpr', 'uTime']);
+  var uL = locs(progLine, ['uProj', 'uView']);
+
+  /* ---------- 场景构建 ---------- */
+  var scene = { draw: function () {}, count: 0 };
+
+  function buildDunes() {
+    var N = 200, SIZE = 16;
+    var pos = [], nrm = [], col = [], idx = [];
+    function height(x, z) {
+      var h = 0;
+      h += fbm(x * 0.22 + 3.1, z * 0.22 - 1.7, 4) * 2.2;
+      /* 沙脊：把噪声折成尖脊 */
+      var r = fbm(x * 0.42 - 0.8, z * 0.42 + 2.2, 3);
+      h += (1.0 - Math.abs(r * 2.0 - 1.0)) * 1.1;
+      /* 靠海一侧压低 */
+      h -= sstep(-3.0, -6.5, x) * 1.4;
+      return h;
+    }
+    for (var z = 0; z <= N; z++) {
+      for (var x = 0; x <= N; x++) {
+        var wx = (x / N - 0.5) * SIZE;
+        var wz = (z / N - 0.5) * SIZE;
+        var h = height(wx, wz);
+        pos.push(wx, h, wz);
+        var e = 0.06;
+        var hx = height(wx + e, wz) - height(wx - e, wz);
+        var hz = height(wx, wz + e) - height(wx, wz - e);
+        var nx = -hx, ny = 2 * e, nz = -hz;
+        var nl = Math.hypot(nx, ny, nz) || 1;
+        nrm.push(nx / nl, ny / nl, nz / nl);
+        /* 沙色：高处偏亮，低处偏暗 */
+        var t = Math.min(1, Math.max(0, (h + 1.2) / 3.4));
+        var base = [0.62, 0.52, 0.38];
+        var light = [0.86, 0.78, 0.62];
+        col.push(base[0] + (light[0] - base[0]) * t,
+                 base[1] + (light[1] - base[1]) * t,
+                 base[2] + (light[2] - base[2]) * t);
+      }
+    }
+    for (var z2 = 0; z2 < N; z2++) {
+      for (var x2 = 0; x2 < N; x2++) {
+        var a = z2 * (N + 1) + x2, b = a + 1, c = a + N + 1, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+    }
+    var pbuf = buf(new Float32Array(pos));
+    var nbuf = buf(new Float32Array(nrm));
+    var cbuf = buf(new Float32Array(col));
+    var ibuf = buf(new Uint16Array(idx), gl.ELEMENT_ARRAY_BUFFER);
+    /* 海面 */
+    var wPos = buf(new Float32Array([-22, 0, -22, 22, 0, -22, 22, 0, 22, -22, 0, 22]));
+    var wNorm = buf(new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]));
+    var wCol = buf(new Float32Array([0.02, 0.045, 0.075, 0.02, 0.045, 0.075,
+                                     0.02, 0.045, 0.075, 0.02, 0.045, 0.075]));
+    var wIdx = buf(new Uint16Array([0, 1, 2, 0, 2, 3]), gl.ELEMENT_ARRAY_BUFFER);
+    scene.count = idx.length / 3;
+    scene.draw = function (proj, view, eye, time) {
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.useProgram(progSolid);
+      gl.uniformMatrix4fv(uS.uProj, false, proj);
+      gl.uniformMatrix4fv(uS.uView, false, view);
+      gl.uniform3f(uS.uEye, eye[0], eye[1], eye[2]);
+      gl.uniform3f(uS.uKey, -0.55, 0.55, 0.42);
+      gl.uniform1f(uS.uFogNear, 6);
+      gl.uniform1f(uS.uFogFar, 30);
+      var aP = gl.getAttribLocation(progSolid, 'aPos');
+      var aN0 = gl.getAttribLocation(progSolid, 'aNorm');
+      var aC0 = gl.getAttribLocation(progSolid, 'aCol');
+      /* 海面 */
+      gl.uniform1f(uS.uWindow, 2);
+      gl.bindBuffer(gl.ARRAY_BUFFER, wPos);
+      gl.enableVertexAttribArray(aP); gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, wNorm);
+      gl.enableVertexAttribArray(aN0); gl.vertexAttribPointer(aN0, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, wCol);
+      gl.enableVertexAttribArray(aC0); gl.vertexAttribPointer(aC0, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wIdx);
+      gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+      /* 地形 */
+      gl.uniform1f(uS.uWindow, 0);
+      var aN = gl.getAttribLocation(progSolid, 'aNorm');
+      var aC = gl.getAttribLocation(progSolid, 'aCol');
+      gl.bindBuffer(gl.ARRAY_BUFFER, pbuf);
+      gl.enableVertexAttribArray(aP); gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, nbuf);
+      gl.enableVertexAttribArray(aN); gl.vertexAttribPointer(aN, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, cbuf);
+      gl.enableVertexAttribArray(aC); gl.vertexAttribPointer(aC, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibuf);
+      gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+    };
+  }
+
+  function buildCity() {
+    var pos = [], nrm = [], col = [], idx = [];
+    var seed = 7;
+    function rnd() { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; }
+    function box(cx, cy, cz, sx, sy, sz, color) {
+      var start = pos.length / 3;
+      var x0 = -sx / 2, x1 = sx / 2, y0 = 0, y1 = sy, z0 = -sz / 2, z1 = sz / 2;
+      var faces = [
+        [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1],[0,0,1]],
+        [[x1,y0,z0],[x0,y0,z0],[x0,y1,z0],[x1,y1,z0],[0,0,-1]],
+        [[x1,y0,z1],[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[1,0,0]],
+        [[x0,y0,z0],[x0,y0,z1],[x0,y1,z1],[x0,y1,z0],[-1,0,0]],
+        [[x0,y1,z1],[x1,y1,z1],[x1,y1,z0],[x0,y1,z0],[0,1,0]]
+      ];
+      for (var f = 0; f < faces.length; f++) {
+        var v = faces[f];
+        var n = v[4];
+        for (var k = 0; k < 4; k++) {
+          pos.push(cx + v[k][0], cy + v[k][1], cz + v[k][2]);
+          nrm.push(n[0], n[1], n[2]);
+          var shade = 0.75 + 0.5 * rnd();
+          col.push(color[0] * shade, color[1] * shade, color[2] * shade);
+        }
+        idx.push(start + f * 4, start + f * 4 + 1, start + f * 4 + 2,
+                 start + f * 4, start + f * 4 + 2, start + f * 4 + 3);
+      }
+    }
+    /* 路网 + 楼体 */
+    var BLK = 1.5, GAP = 0.34;
+    for (var gx = -5; gx <= 5; gx++) {
+      for (var gz = -5; gz <= 5; gz++) {
+        var bx = gx * BLK, bz = gz * BLK;
+        /* 地面块 */
+        var d = Math.hypot(bx, bz);
+        if (d > 8.5) continue;
+        var nB = 1 + ((rnd() * 3) | 0);
+        for (var b = 0; b < nB; b++) {
+          var ox = (rnd() - 0.5) * (BLK - GAP - 0.5);
+          var oz = (rnd() - 0.5) * (BLK - GAP - 0.5);
+          var sx = 0.25 + rnd() * 0.55;
+          var sz = 0.25 + rnd() * 0.55;
+          var sy = 0.25 + Math.pow(rnd(), 1.6) * 2.2 * (1 - d / 11);
+          var dark = 0.035 + rnd() * 0.03;
+          box(bx + ox, 0, bz + oz, sx, sy, sz, [dark, dark * 1.05, dark * 1.15]);
+        }
+      }
+    }
+    /* 地面 */
+    var gp = [], gn = [], gc = [], gi = [];
+    gp.push(-9, 0, -9, 9, 0, -9, 9, 0, 9, -9, 0, 9);
+    for (var q = 0; q < 4; q++) { gn.push(0, 1, 0); gc.push(0.018, 0.02, 0.03); }
+    gi.push(0, 1, 2, 0, 2, 3);
+    var gpB = buf(new Float32Array(gp)), gnB = buf(new Float32Array(gn)), gcB = buf(new Float32Array(gc));
+    var giB = buf(new Uint16Array(gi), gl.ELEMENT_ARRAY_BUFFER);
+    var pbuf = buf(new Float32Array(pos));
+    var nbuf = buf(new Float32Array(nrm));
+    var cbuf = buf(new Float32Array(col));
+    var ibuf = buf(new Uint16Array(idx), gl.ELEMENT_ARRAY_BUFFER);
+    scene.count = idx.length / 3;
+    scene.draw = function (proj, view, eye) {
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.useProgram(progSolid);
+      gl.uniformMatrix4fv(uS.uProj, false, proj);
+      gl.uniformMatrix4fv(uS.uView, false, view);
+      gl.uniform3f(uS.uEye, eye[0], eye[1], eye[2]);
+      gl.uniform3f(uS.uKey, -0.5, 0.6, 0.35);
+      gl.uniform1f(uS.uFogNear, 8);
+      gl.uniform1f(uS.uFogFar, 34);
+      gl.uniform1f(uS.uWindow, 1);
+      var aP = gl.getAttribLocation(progSolid, 'aPos');
+      var aN = gl.getAttribLocation(progSolid, 'aNorm');
+      var aC = gl.getAttribLocation(progSolid, 'aCol');
+      /* 地面 */
+      gl.bindBuffer(gl.ARRAY_BUFFER, gpB);
+      gl.enableVertexAttribArray(aP); gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, gnB);
+      gl.enableVertexAttribArray(aN); gl.vertexAttribPointer(aN, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, gcB);
+      gl.enableVertexAttribArray(aC); gl.vertexAttribPointer(aC, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, giB);
+      gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+      /* 楼体 */
+      gl.uniform1f(uS.uWindow, 1);
+      gl.bindBuffer(gl.ARRAY_BUFFER, pbuf);
+      gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, nbuf);
+      gl.vertexAttribPointer(aN, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, cbuf);
+      gl.vertexAttribPointer(aC, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibuf);
+      gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+    };
+  }
+
+  function buildStars() {
+    var N = 42000;
+    var pos = [], size = [], col = [], bright = [];
+    for (var i = 0; i < N; i++) {
+      /* 球状星团的密度：向中心聚集 */
+      var u = Math.random();
+      var r = Math.pow(u, 0.55) * 12;
+      var th = Math.random() * Math.PI * 2;
+      var ph = Math.acos(2 * Math.random() - 1);
+      var x = r * Math.sin(ph) * Math.cos(th);
+      var y = r * Math.cos(ph) * 0.8;
+      var z = r * Math.sin(ph) * Math.sin(th);
+      pos.push(x, y, z);
+      var core = 1 - Math.min(1, r / 12);
+      size.push(0.22 + Math.random() * 0.38 + core * 0.25);
+      bright.push(0.18 + Math.random() * 0.30 + core * 0.18);
+      var t = Math.random();
+      var c;
+      if (t < 0.18) c = [1.0, 0.82, 0.55];
+      else if (t < 0.42) c = [1.0, 0.94, 0.84];
+      else if (t < 0.75) c = [0.78, 0.86, 1.0];
+      else c = [0.62, 0.74, 1.0];
+      col.push(c[0], c[1], c[2]);
+    }
+    var pbuf = buf(new Float32Array(pos));
+    var sbuf = buf(new Float32Array(size));
+    var cbuf = buf(new Float32Array(col));
+    var bbuf = buf(new Float32Array(bright));
+    scene.count = N;
+    scene.draw = function (proj, view, eye, time) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+      gl.depthMask(false);
+      gl.useProgram(progPoint);
+      gl.uniformMatrix4fv(uP.uProj, false, proj);
+      gl.uniformMatrix4fv(uP.uView, false, view);
+      gl.uniform1f(uP.uDpr, Math.min(window.devicePixelRatio || 1, 2));
+      gl.uniform1f(uP.uTime, time);
+      var aP = gl.getAttribLocation(progPoint, 'aPos');
+      var aS = gl.getAttribLocation(progPoint, 'aS');
+      var aC = gl.getAttribLocation(progPoint, 'aCol');
+      var aB = gl.getAttribLocation(progPoint, 'aB');
+      gl.bindBuffer(gl.ARRAY_BUFFER, pbuf);
+      gl.enableVertexAttribArray(aP); gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, sbuf);
+      gl.enableVertexAttribArray(aS); gl.vertexAttribPointer(aS, 1, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, cbuf);
+      gl.enableVertexAttribArray(aC); gl.vertexAttribPointer(aC, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bbuf);
+      gl.enableVertexAttribArray(aB); gl.vertexAttribPointer(aB, 1, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.POINTS, 0, N);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+    };
+  }
+
+  function buildWeb() {
+    var seed = 42;
+    function rnd() { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; }
+    var nodes = [];
+    for (var i = 0; i < 150; i++) {
+      nodes.push([(rnd() * 2 - 1) * 11, (rnd() * 2 - 1) * 7, (rnd() * 2 - 1) * 11]);
+    }
+    var lines = [], lcol = [];
+    for (var a = 0; a < nodes.length; a++) {
+      var best = [], bd = [];
+      for (var b = 0; b < nodes.length; b++) {
+        if (a === b) continue;
+        var dx = nodes[a][0] - nodes[b][0], dy = nodes[a][1] - nodes[b][1], dz = nodes[a][2] - nodes[b][2];
+        var d = dx * dx + dy * dy + dz * dz;
+        if (best.length < 3) { best.push(b); bd.push(d); }
+        else {
+          var mi = 0;
+          for (var k = 1; k < 3; k++) if (bd[k] > bd[mi]) mi = k;
+          if (d < bd[mi]) { bd[mi] = d; best[mi] = b; }
+        }
+      }
+      for (var q = 0; q < best.length; q++) {
+        var j = best[q];
+        if (j < a) continue;
+        var p0 = nodes[a], p1 = nodes[j];
+        var seg = 8;
+        for (var s = 0; s < seg; s++) {
+          var t0 = s / seg, t1 = (s + 1) / seg;
+          var mx = (p0[0] + p1[0]) / 2, my = (p0[1] + p1[1]) / 2, mz = (p0[2] + p1[2]) / 2;
+          var bend = 0.18;
+          function curve(t) {
+            var x = p0[0] * (1 - t) * (1 - t) + mx * 2 * (1 - t) * t + p1[0] * t * t;
+            var y = p0[1] * (1 - t) * (1 - t) + my * 2 * (1 - t) * t + p1[1] * t * t;
+            var z = p0[2] * (1 - t) * (1 - t) + mz * 2 * (1 - t) * t + p1[2] * t * t;
+            return [x, y + Math.sin(t * 3.14) * bend, z];
+          }
+          var c0 = curve(t0), c1 = curve(t1);
+          lines.push(c0[0], c0[1], c0[2], c1[0], c1[1], c1[2]);
+          var col = [0.32, 0.42, 0.62];
+          lcol.push(col[0], col[1], col[2], col[0], col[1], col[2]);
+        }
+      }
+    }
+    var lpos = buf(new Float32Array(lines));
+    var lcolB = buf(new Float32Array(lcol));
+    /* 节点作为发光星系团 */
+    var ppos = [], psize = [], pcol = [], pbright = [];
+    for (var n = 0; n < nodes.length; n++) {
+      ppos.push(nodes[n][0], nodes[n][1], nodes[n][2]);
+      psize.push(1.6 + rnd() * 2.2);
+      pbright.push(0.9);
+      var warm = rnd();
+      pcol.push(1.0, 0.82 + warm * 0.1, 0.6 + warm * 0.2);
+      /* 周围的小星系 */
+      for (var k2 = 0; k2 < 6; k2++) {
+        ppos.push(nodes[n][0] + (rnd() - 0.5) * 1.4,
+                  nodes[n][1] + (rnd() - 0.5) * 1.4,
+                  nodes[n][2] + (rnd() - 0.5) * 1.4);
+        psize.push(0.4 + rnd() * 0.5);
+        pbright.push(0.35 + rnd() * 0.4);
+        pcol.push(0.75, 0.82, 1.0);
+      }
+    }
+    var nP = psize.length;
+    var pbuf = buf(new Float32Array(ppos));
+    var sbuf = buf(new Float32Array(psize));
+    var cbuf = buf(new Float32Array(pcol));
+    var bbuf = buf(new Float32Array(pbright));
+    scene.count = nodes.length;
+    scene.draw = function (proj, view, eye, time) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+      gl.depthMask(false);
+      gl.useProgram(progLine);
+      gl.uniformMatrix4fv(uL.uProj, false, proj);
+      gl.uniformMatrix4fv(uL.uView, false, view);
+      var aP = gl.getAttribLocation(progLine, 'aPos');
+      var aC = gl.getAttribLocation(progLine, 'aCol');
+      gl.bindBuffer(gl.ARRAY_BUFFER, lpos);
+      gl.enableVertexAttribArray(aP); gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, lcolB);
+      gl.enableVertexAttribArray(aC); gl.vertexAttribPointer(aC, 3, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.LINES, 0, lines.length / 3);
+
+      gl.useProgram(progPoint);
+      gl.uniformMatrix4fv(uP.uProj, false, proj);
+      gl.uniformMatrix4fv(uP.uView, false, view);
+      gl.uniform1f(uP.uDpr, Math.min(window.devicePixelRatio || 1, 2));
+      gl.uniform1f(uP.uTime, time);
+      aP = gl.getAttribLocation(progPoint, 'aPos');
+      var aS = gl.getAttribLocation(progPoint, 'aS');
+      var aC2 = gl.getAttribLocation(progPoint, 'aCol');
+      var aB = gl.getAttribLocation(progPoint, 'aB');
+      gl.bindBuffer(gl.ARRAY_BUFFER, pbuf);
+      gl.enableVertexAttribArray(aP); gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, sbuf);
+      gl.enableVertexAttribArray(aS); gl.vertexAttribPointer(aS, 1, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, cbuf);
+      gl.enableVertexAttribArray(aC2); gl.vertexAttribPointer(aC2, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bbuf);
+      gl.enableVertexAttribArray(aB); gl.vertexAttribPointer(aB, 1, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.POINTS, 0, nP);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+    };
+  }
+
+  if (KEY === 'city') buildCity();
+  else if (KEY === 'stars') buildStars();
+  else if (KEY === 'web') buildWeb();
+  else buildDunes();
+
+  document.getElementById('rc').textContent = String(scene.count);
+
+  /* ---------- 相机 ---------- */
+  var cam = {
+    th: meta.cam.th, ph: meta.cam.ph, dist: meta.cam.dist,
+    tth: meta.cam.th, tph: meta.cam.ph, tdist: meta.cam.dist,
+    tx: meta.cam.tx, ty: meta.cam.ty, tz: meta.cam.tz
+  };
+  var drag = null, moved = 0;
+  canvas.addEventListener('pointerdown', function (e) {
+    drag = { x: e.clientX, y: e.clientY }; moved = 0;
+    canvas.classList.add('drag');
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    moved += Math.abs(dx) + Math.abs(dy);
+    drag.x = e.clientX; drag.y = e.clientY;
+    cam.tth -= dx * 0.005;
+    cam.tph = Math.max(-1.35, Math.min(1.35, cam.tph + dy * 0.004));
+  });
+  function endDrag() { drag = null; canvas.classList.remove('drag'); }
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var lo = KEY === 'stars' || KEY === 'web' ? 8 : 6;
+    var hi = KEY === 'stars' || KEY === 'web' ? 60 : 34;
+    cam.tdist = Math.max(lo, Math.min(hi, cam.tdist * Math.exp(e.deltaY * 0.0012)));
+  }, { passive: false });
+
+  document.getElementById('back').addEventListener('click', function () {
+    if (window.parent !== window) window.parent.postMessage({ type: 'recon-close' }, '*');
+    else history.back();
+  });
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      if (window.parent !== window) window.parent.postMessage({ type: 'recon-close' }, '*');
+    }
+  });
+
+  function resize() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(innerWidth * dpr);
+    canvas.height = Math.floor(innerHeight * dpr);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var last = 0;
+  function frame(ts) {
+    var dt = Math.min(0.05, (ts - last) / 1000 || 0.016);
+    last = ts;
+    if (!drag) cam.tth += dt * 0.03;
+    cam.th += (cam.tth - cam.th) * 0.07;
+    cam.ph += (cam.tph - cam.ph) * 0.07;
+    cam.dist += (cam.tdist - cam.dist) * 0.07;
+
+    var cp = Math.cos(cam.ph), sp = Math.sin(cam.ph);
+    var eye = [
+      cam.tx + Math.sin(cam.th) * cp * cam.dist,
+      cam.ty + sp * cam.dist,
+      cam.tz + Math.cos(cam.th) * cp * cam.dist
+    ];
+    if (KEY === 'dunes') eye[1] = Math.max(eye[1], 1.2);
+    var view = lookAt(eye, [cam.tx, cam.ty, cam.tz], [0, 1, 0]);
+    var proj = perspective(50 * Math.PI / 180, canvas.width / canvas.height, 0.1, 120);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0.015, 0.018, 0.028, 1);
+    gl.depthMask(true);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    scene.draw(proj, view, eye, ts * 0.001);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -202,6 +202,15 @@
   }
   .orbit-cta.show{opacity:1;pointer-events:auto;transform:none}
   .orbit-cta:hover{background:var(--sand);color:#191209}
+  .recon-cta{margin-top:8px;border-color:rgba(238,235,228,.22);color:var(--ink)}
+  .recon-cta:hover{background:rgba(238,235,228,.9);color:#16171c}
+
+  #reconLayer{
+    position:fixed;inset:0;z-index:80;background:#05060a;
+    opacity:0;pointer-events:none;transition:opacity .45s ease;
+  }
+  #reconLayer.open{opacity:1;pointer-events:auto}
+  #reconFrame{width:100%;height:100%;border:0;display:block}
   .orbit-bar{
     position:fixed;left:50%;bottom:34px;transform:translateX(-50%);
     z-index:24;display:none;align-items:center;gap:16px;
@@ -454,6 +463,33 @@
     .hotspot::after{animation:none}
   }
 
+  /* ============ 舷窗与准星 ============ */
+  #viewframe{
+    position:fixed;inset:3.4%;z-index:8;pointer-events:none;
+    opacity:.9;transition:opacity .5s;
+  }
+  #viewframe .c{position:absolute;width:16px;height:16px;border:0 solid rgba(216,185,140,.45)}
+  #viewframe .tl{left:0;top:0;border-left-width:1px;border-top-width:1px}
+  #viewframe .tr{right:0;top:0;border-right-width:1px;border-top-width:1px}
+  #viewframe .bl{left:0;bottom:0;border-left-width:1px;border-bottom-width:1px}
+  #viewframe .br{right:0;bottom:0;border-right-width:1px;border-bottom-width:1px}
+
+  #reticle{
+    position:fixed;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;
+    z-index:8;pointer-events:none;opacity:.3;border:1px solid rgba(238,235,228,.4);
+    border-radius:50%;
+    background:radial-gradient(circle at 50% 50%, rgba(216,185,140,.95) 0 1.5px, transparent 2px);
+  }
+  #reticle::before,#reticle::after{
+    content:"";position:absolute;left:50%;top:50%;background:rgba(238,235,228,.5);
+  }
+  #reticle::before{width:30px;height:1px;margin:-.5px 0 0 -15px}
+  #reticle::after{width:1px;height:30px;margin:-15px 0 0 -.5px;opacity:.45}
+
+  body.orbit-mode #viewframe, body.orbit-mode #reticle,
+  body.solar-mode #viewframe, body.solar-mode #reticle,
+  body.galaxy-mode #viewframe, body.galaxy-mode #reticle{opacity:0}
+
   /* ============ 跨越数量级：速度线 / 对数尺 / 量级水印 ============ */
   #fx{position:fixed;inset:0;z-index:6;pointer-events:none;width:100%;height:100%}
 
@@ -538,6 +574,9 @@
 <div id="vignette"></div>
 <div id="hotspots"></div>
 
+<div id="viewframe" aria-hidden="true"><i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i></div>
+<div id="reticle" aria-hidden="true"></div>
+
 <div id="voidLabel">
   <div class="kicker">跨 越 尺 度</div>
   <p id="voidText">这里几乎什么都没有</p>
@@ -578,6 +617,7 @@
     <div class="fov" id="fovText">画面宽约 3 厘米</div>
     <h1 class="stage-name" id="stageName">一粒沙</h1>
     <button class="orbit-cta" id="orbitCta">进入轨道 →</button>
+    <button class="orbit-cta recon-cta" id="reconCta">进入重建 →</button>
   </div>
 
   <div class="hud-mid">
@@ -622,7 +662,7 @@
     <h1>一页纸的宇宙</h1>
     <p>从一粒沙出发，一路向后退，直到可观测宇宙的边缘。途中你经过的每一张画面，都是真实拍到的。</p>
     <button class="start-btn" id="startBtn">开始旅程</button>
-    <div class="intro-hint">滚轮缩放 · <kbd>空格</kbd> 播放 · <kbd>←</kbd><kbd>→</kbd> 逐站</div>
+    <div class="intro-hint">上下拖动前进 · 左右拖动环顾 · <kbd>空格</kbd> 播放</div>
   </div>
 </div>
 
@@ -652,6 +692,7 @@
 
 <div id="loader">载入影像…</div>
 <div class="toast" id="toast">链接已复制</div>
+<div id="reconLayer"><iframe id="reconFrame" title="重建模式"></iframe></div>
 
 <script>
 (function () {
@@ -1221,6 +1262,46 @@
     'void main(){ gl_FragColor = uColor; }'
   ].join('\n');
 
+  /* 后期：全屏三角/四边形 */
+  var VERT_FULL = [
+    'attribute vec2 aP;',
+    'varying vec2 vUv;',
+    'void main(){ vUv = aP * 0.5 + 0.5; gl_Position = vec4(aP, 0.0, 1.0); }'
+  ].join('\n');
+  var FRAG_COPY = [
+    'precision mediump float;',
+    'varying vec2 vUv;',
+    'uniform sampler2D uTex;',
+    'uniform float uGain;',
+    'void main(){ gl_FragColor = vec4(texture2D(uTex, vUv).rgb * uGain, 1.0); }'
+  ].join('\n');
+  var FRAG_BRIGHT = [
+    'precision mediump float;',
+    'varying vec2 vUv;',
+    'uniform sampler2D uTex;',
+    'uniform float uThresh;',
+    'void main(){',
+    '  vec3 c = texture2D(uTex, vUv).rgb;',
+    '  float l = max(c.r, max(c.g, c.b));',
+    '  float k = smoothstep(uThresh, uThresh + 0.30, l);',
+    '  gl_FragColor = vec4(c * k, 1.0);',
+    '}'
+  ].join('\n');
+  var FRAG_BLUR = [
+    'precision mediump float;',
+    'varying vec2 vUv;',
+    'uniform sampler2D uTex;',
+    'uniform vec2 uDir;',
+    'void main(){',
+    '  vec3 s = texture2D(uTex, vUv).rgb * 0.227027;',
+    '  s += texture2D(uTex, vUv + uDir * 1.3846).rgb * 0.316216;',
+    '  s += texture2D(uTex, vUv - uDir * 1.3846).rgb * 0.316216;',
+    '  s += texture2D(uTex, vUv + uDir * 3.2308).rgb * 0.070270;',
+    '  s += texture2D(uTex, vUv - uDir * 3.2308).rgb * 0.070270;',
+    '  gl_FragColor = vec4(s, 1.0);',
+    '}'
+  ].join('\n');
+
   /* 土星环 */
   var VERT_RING = [
     'attribute vec3 aP;',
@@ -1271,13 +1352,22 @@
   }
 
   var progQ = null, progP = null, progS = null, progSun = null, progLine = null, progRing = null, progCloud = null;
-  var quadBuf, gridBuf = null, gridIdx = null, gridCount = 0, starBuf, dustBuf, sphereGeo = null, ringGeo = null, orbitGeo = [], blackTex = null;
+  var progFull = null, progBright = null, progBlur = null;
+  var uFull = {}, uBright = {}, uBlur = {};
+  var sceneT = null, bloomA = null, bloomB = null;
+  var quadBuf, gridBuf = null, gridIdx = null, gridCount = 0, starBuf, dustBuf, railBuf = null, sphereGeo = null, ringGeo = null, orbitGeo = [], blackTex = null;
   var uQ = {}, uP = {}, uS = {}, uSunP = {}, uLine = {}, uRing = {}, uC = {};
 
   if (GL_OK) {
     progQ = makeProgram(VERT_QUAD, FRAG_QUAD);
     progP = makeProgram(VERT_PTS, FRAG_PTS);
     progS = makeProgram(VERT_SPH, FRAG_SPH);
+    progFull = makeProgram(VERT_FULL, FRAG_COPY);
+    progBright = makeProgram(VERT_FULL, FRAG_BRIGHT);
+    progBlur = makeProgram(VERT_FULL, FRAG_BLUR);
+    uFull = { tex: gl.getUniformLocation(progFull, 'uTex'), gain: gl.getUniformLocation(progFull, 'uGain') };
+    uBright = { tex: gl.getUniformLocation(progBright, 'uTex'), thresh: gl.getUniformLocation(progBright, 'uThresh') };
+    uBlur = { tex: gl.getUniformLocation(progBlur, 'uTex'), dir: gl.getUniformLocation(progBlur, 'uDir') };
     uQ = {
       proj: gl.getUniformLocation(progQ, 'uProj'),
       view: gl.getUniformLocation(progQ, 'uView'),
@@ -1331,6 +1421,9 @@
     quadBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+
+    /* 尺度导轨：走廊两侧的两条细线 */
+    railBuf = gl.createBuffer();
 
     /* 1×1 黑色贴图：转场时垫在影像后面，避免两张半透明图之间漏出星空 */
     blackTex = gl.createTexture();
@@ -1648,18 +1741,22 @@
 
   /* 只加载当前站前后两站，避免一次性拉满 6.5 MB */
   function ensurePlanes() {
-    var lo = Math.max(0, active - 2), hi = Math.min(STAGES.length - 1, active + 2);
+    var lo = Math.max(0, active - 3), hi = Math.min(STAGES.length - 1, active + 3);
     for (var k = lo; k <= hi; k++) loadPlane(k);
   }
 
   /* 3D 参数 */
-  var D = 10;
+  var D = 2.0;          /* 当前层与相机的距离 */
+  var GAP_K = 6.0;      /* 每 1 个数量级在走廊里的纵深 */
+  var PLANE_F = 0.84;   /* 画面占视口的比例：留一圈舷窗，能看见走廊 */
   var FOV = 50 * Math.PI / 180;
   var projMat = null, baseW = 1, baseH = 1;
   var camX = 0, camY = 0, camTX = 0, camTY = 0, camRaf = null;
   /* 活的照片：连续时间 + 指针视差 */
   var lifeTime = 0, parX = 0, parY = 0, parTX = 0, parTY = 0, lastParX = 0, lastParY = 0;
   var lastRotX = 0, lastRotY = 0;
+  /* 驾驶舱视角：左右拖动 = 转头，松手回正 */
+  var lookYaw = 0, lookYawT = 0, lookPitch = 0, lookPitchT = 0;
   window.addEventListener('pointermove', function (e) {
     parTX = (e.clientX / window.innerWidth - 0.5) * 2;
     parTY = (e.clientY / window.innerHeight - 0.5) * 2;
@@ -1762,6 +1859,8 @@
 
   function drawScene() {
     if (!GL_OK || !projMat) return;
+    if (sceneT) gl.bindFramebuffer(gl.FRAMEBUFFER, sceneT.fb);
+    else gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0.014, 0.017, 0.030, 1);
     gl.depthMask(true);
@@ -1769,17 +1868,34 @@
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
 
-    /* 旅程相机：平移 */
-    viewMat = new Float32Array([
-      1, 0, 0, 0,
-      0, 1, 0, 0,
-      0, 0, 1, 0,
-      -camX, -camY, 0, 1
-    ]);
+    /* 旅程相机：可以左右看、上下看，像坐在驾驶舱里 */
+    var cpL = Math.cos(lookPitch), spL = Math.sin(lookPitch);
+    var dirX = Math.sin(lookYaw) * cpL, dirY = spL, dirZ = -Math.cos(lookYaw) * cpL;
+    viewMat = lookAt([camX, camY, 0],
+      [camX + dirX, camY + dirY, dirZ],
+      [0, 1, 0]);
 
     /* 1. 背后的星尘（叠加） */
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
     drawCloud(starBuf, u * 22, 0.95 * (1 - solarMix * 0.9), [0.82, 0.88, 1.0]);
+
+    /* 1.5 尺度导轨：沿走廊伸出去的两条细线，每一站一个刻度 */
+    if (railBuf) {
+      var railX = baseW * PLANE_F * 0.5 + 0.07;
+      var segs = [-railX, 0, 1.2, -railX, 0, -50, railX, 0, 1.2, railX, 0, -50];
+      for (var ri = 0; ri < STAGES.length; ri++) {
+        var rz = -((STAGES[ri].u - u) * GAP_K + D);
+        if (rz > 0.8 || rz < -48) continue;
+        segs.push(-railX, -0.07, rz, -railX, 0.07, rz, railX, -0.07, rz, railX, 0.07, rz);
+      }
+      gl.useProgram(progLine);
+      gl.uniformMatrix4fv(uLine.proj, false, projMat);
+      gl.uniformMatrix4fv(uLine.view, false, viewMat);
+      gl.uniform4f(uLine.color, 0.86, 0.75, 0.56, 0.30 * (1 - Math.max(earthMix, solarMix, galaxyMix)));
+      bindAttr(progLine, 'aP', railBuf, 3);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(segs), gl.DYNAMIC_DRAW);
+      gl.drawArrays(gl.LINES, 0, segs.length / 3);
+    }
 
     /* 2. 影像平面 */
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -1811,28 +1927,22 @@
     var scrAspect = canvas.width / canvas.height;
     for (var i = 0; i < planes.length; i++) {
       var pl = planes[i];
+      if (!pl.ready) continue;
       var op = (i === holdIdx) ? 1 : pl.opacity;
-      if (!pl.ready || op < 0.004) continue;
       var s = STAGES[i];
-      /* 全程满屏叠化，中间不再露星空。
-         跨越数量级时改成"推镜"：送出去的图缓慢放大，接进来的图从 1.16 倍收回 1——
-         两张图同心推拉，看起来是镜头穿过这一层，而不是两张照片淡淡地换掉。 */
-      var f = 1, px = 0, py = 0;
-      if (i < STAGES.length - 1 && u > s.u) {
-        var gN = STAGES[i + 1].u - s.u;
-        if (gN > 2.8) {
-          var tN = clamp((u - s.u) / gN, 0, 1);
-          tN = tN * tN * (3 - 2 * tN);
-          f = 1 + 0.16 * tN;
-        }
-      } else if (i > 0 && u < s.u) {
-        var gP = s.u - STAGES[i - 1].u;
-        if (gP > 2.8) {
-          var tP = clamp((u - STAGES[i - 1].u) / gP, 0, 1);
-          tP = tP * tP * (3 - 2 * tP);
-          f = 1.16 - 0.16 * tP;
-        }
+
+      /* 走廊：每一层按尺度差摆在纵深里。u 前进时，画面是真的从你身边穿过去 */
+      var zRel = -((s.u - u) * GAP_K + D);
+      if (zRel > 1.0 || zRel < -90) continue;
+
+      /* 前方更远的那几层留一点微光，走廊才看得见尽头 */
+      var ghost = 0;
+      if (s.u > u) {
+        var ahead = -zRel - D;
+        if (ahead > 0.45) ghost = 0.13 * Math.exp(-ahead / 20);
       }
+      var drawOp = Math.max(op, ghost);
+      if (drawOp < 0.004) continue;
 
       /* 画面比例裁切（等价于 object-fit: cover） */
       var uvSx = 1, uvSy = 1, uvOx = 0, uvOy = 0;
@@ -1843,15 +1953,18 @@
         uvSy = pl.aspect / scrAspect;
         uvOy = (1 - uvSy) * pl.posY;
       }
-      drawn.push({ idx: i, pl: pl, op: op, f: f, px: px, py: py,
+      drawn.push({ idx: i, pl: pl, op: drawOp, mainOp: op, z: zRel, f: 1, px: 0, py: 0,
         uvSx: uvSx, uvSy: uvSy, uvOx: uvOx, uvOy: uvOy });
     }
+
+    /* 远的先画，近的压在上面 */
+    drawn.sort(function (a, b) { return a.z - b.z; });
 
     /* 黑色底板：两张半透明图叠化时，背景剩余比例是 (1-a)(1-b)，星点会从中间漏出来。
        给每张影像垫一块同尺寸的黑板，把这个缺口补上——静止时被不透明影像完全遮住，
        看不出区别；星云 / 跃迁段总透明度本来就低，黑板也随之变淡，星空照常露出。 */
     var cov = 0;
-    for (var ci = 0; ci < drawn.length; ci++) cov += drawn[ci].op;
+    for (var ci = 0; ci < drawn.length; ci++) cov += drawn[ci].mainOp;
     var plateA = Math.min(1, cov) * (1 - Math.max(earthMix, solarMix, galaxyMix));
     if (plateA > 0.01 && blackTex) {
       gl.activeTexture(gl.TEXTURE0);
@@ -1875,15 +1988,18 @@
       gl.bindTexture(gl.TEXTURE_2D, texMid);
       for (var di = 0; di < drawn.length; di++) {
         var d0 = drawn[di];
-        gl.uniform3f(uQ.pos, d0.px, d0.py, -D * 1.006);
-        gl.uniform2f(uQ.size, baseW * d0.f * 1.02, baseH * d0.f * 1.02);
+        if (d0.mainOp < 0.01) continue;
+        var pw = clamp(-d0.z / D, 0.1, 1);
+        gl.uniform3f(uQ.pos, d0.px, d0.py, d0.z - 0.012);
+        gl.uniform2f(uQ.size, baseW * PLANE_F * 1.02, baseH * PLANE_F * 1.02);
+        gl.uniform1f(uQ.opacity, plateA * pw);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
     }
 
     /* 指针带着整张照片的曲面轻微旋转：这是真正的三维，不只是平面位移 */
-    lastRotY = -parX * 0.055 + Math.sin(lifeTime * 0.13) * 0.012;
-    lastRotX = parY * 0.042 + Math.cos(lifeTime * 0.11) * 0.010;
+    lastRotY = -parX * 0.12 + Math.sin(lifeTime * 0.13) * 0.012;
+    lastRotX = parY * 0.085 + Math.cos(lifeTime * 0.11) * 0.010;
     if (!hasVertexTex) { lastRotX = 0; lastRotY = 0; }
 
     if (gridBuf) {
@@ -1893,8 +2009,8 @@
     for (var qi = 0; qi < drawn.length; qi++) {
       var dd0 = drawn[qi];
       if (dd0.idx === active) {
-        activePlane.px = dd0.px; activePlane.py = dd0.py; activePlane.z = -D;
-        activePlane.w = baseW * dd0.f; activePlane.h = baseH * dd0.f;
+        activePlane.px = dd0.px; activePlane.py = dd0.py; activePlane.z = dd0.z;
+        activePlane.w = baseW * dd0.f * PLANE_F; activePlane.h = baseH * dd0.f * PLANE_F;
         activePlane.uvSx = dd0.uvSx; activePlane.uvSy = dd0.uvSy;
         activePlane.uvOx = dd0.uvOx; activePlane.uvOy = dd0.uvOy;
         activePlane.depthK = STAGES[dd0.idx].depthK;
@@ -1903,8 +2019,8 @@
         activePlane.rotX = lastRotX; activePlane.rotY = lastRotY;
         activePlane.pl = dd0.pl;
       }
-      gl.uniform3f(uQ.pos, dd0.px, dd0.py, -D);
-      gl.uniform2f(uQ.size, baseW * dd0.f, baseH * dd0.f);
+      gl.uniform3f(uQ.pos, dd0.px, dd0.py, dd0.z);
+      gl.uniform2f(uQ.size, baseW * dd0.f * PLANE_F, baseH * dd0.f * PLANE_F);
       gl.uniform2f(uQ.uvScale, dd0.uvSx, dd0.uvSy);
       gl.uniform2f(uQ.uvOffset, dd0.uvOx, dd0.uvOy);
       gl.uniform1f(uQ.opacity, dd0.op * (1 - earthMix) * (1 - solarMix) * (1 - galaxyMix) *
@@ -1949,6 +2065,50 @@
 
     /* 6. 银河系模式 */
     if (galaxyMix > 0.002) drawGalaxy(galaxyMix * (1 - 0.8 * Math.sin(Math.PI * galaxyMix)));
+
+    /* 7. 后期：高光提取 + 两遍模糊 + 叠加，让星光和灯火真的有光晕 */
+    if (sceneT && bloomA && bloomB) {
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.BLEND);
+      bindAttr(progBright, 'aP', quadBuf, 2);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, bloomA.fb);
+      gl.viewport(0, 0, bloomA.w, bloomA.h);
+      gl.useProgram(progBright);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, sceneT.tex);
+      gl.uniform1i(uBright.tex, 0);
+      gl.uniform1f(uBright.thresh, 0.70);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, bloomB.fb);
+      gl.useProgram(progBlur);
+      gl.bindTexture(gl.TEXTURE_2D, bloomA.tex);
+      gl.uniform1i(uBlur.tex, 0);
+      gl.uniform2f(uBlur.dir, 1.0 / bloomA.w, 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, bloomA.fb);
+      gl.bindTexture(gl.TEXTURE_2D, bloomB.tex);
+      gl.uniform2f(uBlur.dir, 0, 1.0 / bloomA.h);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.useProgram(progFull);
+      bindAttr(progFull, 'aP', quadBuf, 2);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, sceneT.tex);
+      gl.uniform1i(uFull.tex, 0);
+      gl.uniform1f(uFull.gain, 1.0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.bindTexture(gl.TEXTURE_2D, bloomA.tex);
+      gl.uniform1f(uFull.gain, 0.45);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.disable(gl.BLEND);
+    }
 
     /* 载入提示 */
     if (loaderEl) {
@@ -2541,6 +2701,7 @@
       active = best;
       updateStageUI();
       updateHotspots();
+      updateReconCta();
     }
 
     var s2 = STAGES[active];
@@ -2785,6 +2946,9 @@
       var dy = dragY - e.clientY;
       dragY = e.clientY;
       setU(u + dy * 0.006);
+      /* 左右拖动：转动视线，像扶着舱壁看侧面 */
+      var jdx = e.clientX - prev.x;
+      lookYawT = clamp(lookYawT - jdx * 0.0024, -0.42, 0.42);
     }
   });
   var lastPinch = 0;
@@ -2920,6 +3084,16 @@
 
   /* ---------- 轨道模式：地球 / 太阳系 ---------- */
   var orbitCta = document.getElementById('orbitCta');
+  var reconCta = document.getElementById('reconCta');
+  var reconLayer = document.getElementById('reconLayer');
+  var reconFrame = document.getElementById('reconFrame');
+  var RECON_MAP = {
+    0: 'sand-3d.html',
+    1: 'reconstruct.html#dunes',
+    2: 'reconstruct.html#city',
+    7: 'reconstruct.html#stars',
+    9: 'reconstruct.html#web'
+  };
   var EARTH_INDEX = -1, SUN_INDEX = -1, GALAXY_INDEX = -1;
   STAGES.forEach(function (s, i) {
     if (s.name === '地球') EARTH_INDEX = i;
@@ -3034,7 +3208,38 @@
     if (show) {
       orbitCta.textContent = atSun ? '进入太阳系 →' : (atGalaxy ? '进入银河系 →' : '进入轨道 →');
     }
+    updateReconCta();
   }
+
+  /* 重建模式：把照片换成程序化三维场景 */
+  function updateReconCta() {
+    var rk = RECON_MAP[active];
+    var show = !!rk && GL_OK && !anyOrbit() &&
+      earthMix < 0.05 && solarMix < 0.05 && galaxyMix < 0.05 &&
+      !reconLayer.classList.contains('open');
+    reconCta.classList.toggle('show', show);
+  }
+  reconCta.addEventListener('click', function () {
+    var rk = RECON_MAP[active];
+    if (!rk) return;
+    if (playing) stopPlay();
+    closeDrawer();
+    reconFrame.src = rk;
+    reconLayer.classList.add('open');
+  });
+  function closeRecon() {
+    if (!reconLayer.classList.contains('open')) return;
+    reconLayer.classList.remove('open');
+    setTimeout(function () {
+      if (!reconLayer.classList.contains('open')) reconFrame.src = 'about:blank';
+    }, 650);
+  }
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'recon-close') closeRecon();
+  });
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeRecon();
+  });
 
   function updateSolarBar() {
     var html = '<button class="solar-item s-sun' + (solarCam.focus ? '' : ' active') +
@@ -3208,6 +3413,42 @@
   updateStageUI();
   updateHotspots();
   /* ---------- 3D 尺寸与镜头 ---------- */
+  function makeTarget(w, h, withDepth) {
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    var fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    var rb = null;
+    if (withDepth) {
+      rb = gl.createRenderbuffer();
+      gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+    }
+    var ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { fb: fb, tex: tex, rb: rb, w: w, h: h, ok: ok };
+  }
+
+  function initPost() {
+    if (!GL_OK) return;
+    if (sceneT) { gl.deleteFramebuffer(sceneT.fb); gl.deleteTexture(sceneT.tex); if (sceneT.rb) gl.deleteRenderbuffer(sceneT.rb); }
+    if (bloomA) { gl.deleteFramebuffer(bloomA.fb); gl.deleteTexture(bloomA.tex); }
+    if (bloomB) { gl.deleteFramebuffer(bloomB.fb); gl.deleteTexture(bloomB.tex); }
+    sceneT = makeTarget(canvas.width, canvas.height, true);
+    var bw = Math.max(2, Math.floor(canvas.width / 2));
+    var bh = Math.max(2, Math.floor(canvas.height / 2));
+    bloomA = makeTarget(bw, bh, false);
+    bloomB = makeTarget(bw, bh, false);
+    if (!sceneT.ok) { sceneT = null; bloomA = null; bloomB = null; }
+  }
+
   function resizeGL() {
     var w = window.innerWidth, h = window.innerHeight;
     dpr = Math.min(window.devicePixelRatio || 1, 1.75);
@@ -3219,6 +3460,7 @@
     projMat = perspective(FOV, w / h, 0.1, 600);
     baseH = 2 * Math.tan(FOV / 2) * D * 1.11;
     baseW = baseH * (w / h);
+    initPost();
     if (typeof active === 'number' && STAGES[active]) {
       humanText.textContent = humanLine(STAGES[active]);
     }
@@ -3242,6 +3484,9 @@
     lifeTime = ts * 0.001;
     parX += (parTX - parX) * 0.06;
     parY += (parTY - parY) * 0.06;
+    if (dragY === null) { lookYawT *= 0.94; lookPitchT *= 0.94; }
+    lookYaw += (lookYawT - lookYaw) * 0.12;
+    lookPitch += (lookPitchT - lookPitch) * 0.12;
     var tx = camTX + (reduceMotion ? 0 : Math.sin(t * 0.23) * 0.05);
     var ty = camTY + (reduceMotion ? 0 : Math.cos(t * 0.19) * 0.032);
     camX += (tx - camX) * 0.06;
