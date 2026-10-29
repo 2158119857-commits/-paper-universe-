@@ -141,7 +141,7 @@
     dunes: {
       kicker: 'RECONSTRUCTED · 02', title: '沙丘与海岸',
       sub: '由多层噪声生成的地形与沙脊 · <b>不是照片</b>',
-      cam: { th: 0.7, ph: 0.72, dist: 19, tx: 0, ty: 0.2, tz: 0 }
+      cam: { th: 0.85, ph: 0.95, dist: 21, tx: 0, ty: 0.1, tz: 0 }
     },
     city: {
       kicker: 'RECONSTRUCTED · 03', title: '城市夜色',
@@ -198,9 +198,10 @@
     '  vec3 V = normalize(uEye - vW);',
     '  vec3 K = normalize(uKey);',
     '  float kd = max(dot(N, K), 0.0);',
+    '  float fill = max(dot(N, normalize(vec3(0.62, 0.38, -0.55))), 0.0);',
     '  float up = max(N.y, 0.0);',
-    '  vec3 amb = mix(vec3(0.055, 0.06, 0.07), vec3(0.17, 0.18, 0.2), up);',
-    '  vec3 col = vC * (amb + kd * 1.15);',
+    '  vec3 amb = mix(vec3(0.10, 0.095, 0.09), vec3(0.24, 0.23, 0.21), up);',
+    '  vec3 col = vC * (amb + kd * 1.05 + fill * 0.22);',
     /* 地形细节：风纹 + 边缘淡出，避免露出方形切边 */
     '  if (uWindow < 0.5) {',
     '    float rip = vn(vW.xz * 9.0) * 0.6 + vn(vW.xz * 26.0) * 0.4;',
@@ -295,13 +296,19 @@
     var N = 200, SIZE = 16;
     var pos = [], nrm = [], col = [], idx = [];
     function height(x, z) {
-      var h = 0;
-      h += fbm(x * 0.22 + 3.1, z * 0.22 - 1.7, 4) * 2.2;
-      /* 沙脊：把噪声折成尖脊 */
-      var r = fbm(x * 0.42 - 0.8, z * 0.42 + 2.2, 3);
-      h += (1.0 - Math.abs(r * 2.0 - 1.0)) * 1.1;
-      /* 靠海一侧压低 */
-      h -= sstep(-3.0, -6.5, x) * 1.4;
+      /* 大尺度缓坡 */
+      var h = fbm(x * 0.09 + 3.1, z * 0.09 - 1.7, 3) * 0.9;
+      /* 横向沙丘：脊线沿 z 拉长，相位被噪声扭曲，避免出现规则条纹 */
+      var ph = x * 1.95 + fbm(x * 0.085, z * 0.17, 3) * 6.2 + z * 0.14;
+      var t = (ph / 6.2831853) % 1;
+      if (t < 0) t += 1;
+      /* 迎风坡缓、背风坡陡——这是沙丘最容易被认出的特征 */
+      var prof = t < 0.74 ? Math.pow(t / 0.74, 1.45) : Math.pow((1 - t) / 0.26, 0.75);
+      h += prof * 1.35;
+      /* 脊顶再叠一点风纹 */
+      h += fbm(x * 0.9 + 7.0, z * 0.9 - 3.0, 2) * 0.10;
+      /* 靠海一侧压低，露出水面 */
+      h -= sstep(-3.2, -6.8, x) * 1.9;
       return h;
     }
     for (var z = 0; z <= N; z++) {
@@ -338,8 +345,8 @@
     /* 海面 */
     var wPos = buf(new Float32Array([-22, 0, -22, 22, 0, -22, 22, 0, 22, -22, 0, 22]));
     var wNorm = buf(new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]));
-    var wCol = buf(new Float32Array([0.02, 0.045, 0.075, 0.02, 0.045, 0.075,
-                                     0.02, 0.045, 0.075, 0.02, 0.045, 0.075]));
+    var wCol = buf(new Float32Array([0.035, 0.075, 0.115, 0.035, 0.075, 0.115,
+                                     0.035, 0.075, 0.115, 0.035, 0.075, 0.115]));
     var wIdx = buf(new Uint16Array([0, 1, 2, 0, 2, 3]), gl.ELEMENT_ARRAY_BUFFER);
     scene.count = idx.length / 3;
     scene.draw = function (proj, view, eye, time) {
@@ -349,7 +356,7 @@
       gl.uniformMatrix4fv(uS.uProj, false, proj);
       gl.uniformMatrix4fv(uS.uView, false, view);
       gl.uniform3f(uS.uEye, eye[0], eye[1], eye[2]);
-      gl.uniform3f(uS.uKey, -0.55, 0.55, 0.42);
+      gl.uniform3f(uS.uKey, -0.42, 0.86, 0.30);
       gl.uniform1f(uS.uFogNear, 6);
       gl.uniform1f(uS.uFogFar, 30);
       var aP = gl.getAttribLocation(progSolid, 'aPos');
