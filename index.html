@@ -1891,7 +1891,9 @@
       gl.useProgram(progLine);
       gl.uniformMatrix4fv(uLine.proj, false, projMat);
       gl.uniformMatrix4fv(uLine.view, false, viewMat);
-      gl.uniform4f(uLine.color, 0.86, 0.75, 0.56, 0.30 * (1 - Math.max(earthMix, solarMix, galaxyMix)));
+      var gapFade = gapBack.i >= 0 ? (1 - Math.pow(Math.sin(Math.PI * gapBack.t), 0.85)) : 1;
+      gl.uniform4f(uLine.color, 0.86, 0.75, 0.56,
+        0.30 * (1 - Math.max(earthMix, solarMix, galaxyMix)) * gapFade);
       bindAttr(progLine, 'aP', railBuf, 3);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(segs), gl.DYNAMIC_DRAW);
       gl.drawArrays(gl.LINES, 0, segs.length / 3);
@@ -1901,6 +1903,65 @@
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.disable(gl.DEPTH_TEST);
     gl.useProgram(progQ);
+
+    /* 1.8 站间穿越层：两张平面退远时，背后仍然「有画面」。
+       出去的那张朝热点推近、放大；进来的那张从同一个点展开、落回满屏。 */
+    if (gapBack.i >= 0) {
+      var bA = planes[gapBack.i], bB = planes[gapBack.i + 1];
+      var gt = gapBack.t;
+      var gW = Math.pow(Math.sin(Math.PI * gt), 0.85);
+      if (bA.ready && bB.ready && gW > 0.02) {
+        var fadeB = (1 - earthMix) * (1 - solarMix) * (1 - galaxyMix) * (1 - voidNow);
+        var depB = D * 1.9;
+        var scl = depB / D;
+        var hot0 = (STAGES[gapBack.i].hotspots && STAGES[gapBack.i].hotspots[0]) || { x: 50, y: 50 };
+        var hx0 = hot0.x / 100, hy0 = hot0.y / 100;
+        var scrA0 = canvas.width / canvas.height;
+        function coverOf(pl) {
+          if (pl.aspect > scrA0) return [scrA0 / pl.aspect, 1, (1 - scrA0 / pl.aspect) * pl.posX, 0];
+          return [1, pl.aspect / scrA0, 0, (1 - pl.aspect / scrA0) * pl.posY];
+        }
+        function paintGap(pl, f, op, amount) {
+          if (op <= 0.004) return;
+          var cv = coverOf(pl);
+          /* 朝热点推近时画面会平移，得同步放大，否则侧边会露出空档 */
+          var pad = Math.max(Math.abs(0.5 - hx0), Math.abs(0.5 - hy0)) * amount * 0.55;
+          var fe = f * (1 + 1.9 * pad);
+          var sw = baseW * scl * fe, sh = baseH * scl * fe;
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, texMid);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, pl.tex);
+          bindAttr(progQ, 'aP', quadBuf, 2);
+          gl.uniformMatrix4fv(uQ.proj, false, projMat);
+          gl.uniformMatrix4fv(uQ.view, false, viewMat);
+          gl.uniform1i(uQ.tex, 0);
+          gl.uniform1i(uQ.depth, 1);
+          gl.uniform1f(uQ.time, lifeTime);
+          gl.uniform3f(uQ.pos, (0.5 - hx0) * sw * amount * 0.55, -(0.5 - hy0) * sh * amount * 0.55, -depB);
+          gl.uniform2f(uQ.size, sw, sh);
+          gl.uniform2f(uQ.uvScale, cv[0], cv[1]);
+          gl.uniform2f(uQ.uvOffset, cv[2], cv[3]);
+          gl.uniform1f(uQ.opacity, op * fadeB);
+          gl.uniform2f(uQ.par, 0, 0);
+          gl.uniform1f(uQ.depthK, 0);
+          gl.uniform1f(uQ.life, 0.4);
+          gl.uniform1f(uQ.noDepth, 1);
+          gl.uniform1f(uQ.ao, 0);
+          gl.uniform1f(uQ.relief, 0);
+          gl.uniform1f(uQ.cloud, 0);
+          gl.uniform1f(uQ.spin, 0);
+          gl.uniform2f(uQ.light, 0, -1);
+          gl.uniform1f(uQ.disp, 0);
+          gl.uniform2f(uQ.rot, 0, 0);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
+        /* 出去的：放大 + 朝热点推，越走越远 */
+        paintGap(bA, 1 + 0.55 * gW, 1 - smooth(0.56, 0.96, gt), smooth(0.05, 0.70, gt) * 0.8);
+        /* 进来的：从热点处的大特写收缩回满屏 */
+        paintGap(bB, 1 + 0.45 * (1 - gt), smooth(0.34, 0.86, gt), 1 - smooth(0.28, 0.72, gt));
+      }
+    }
     gl.uniformMatrix4fv(uQ.proj, false, projMat);
     gl.uniformMatrix4fv(uQ.view, false, viewMat);
     gl.uniform1i(uQ.tex, 0);
@@ -1931,6 +1992,14 @@
       var op = (i === holdIdx) ? 1 : pl.opacity;
       var s = STAGES[i];
 
+      /* 站间穿越层已经在满屏接住画面，走廊里的平面这时候要让开，
+         否则会露出「一张缩小照片浮在空中」的卡片感 */
+      if (gapBack.i >= 0 && (i === gapBack.i || i === gapBack.i + 1)) {
+        var gg0 = gapBack.t;
+        var gW0 = Math.pow(Math.sin(Math.PI * gg0), 0.85);
+        op *= 1 - gW0;   /* 完全让开，交给满屏的穿越层 */
+      }
+
       /* 走廊：每一层按尺度差摆在纵深里。u 前进时，画面是真的从你身边穿过去 */
       var zRel = -((s.u - u) * GAP_K + D);
       if (zRel > 1.0 || zRel < -90) continue;
@@ -1941,7 +2010,7 @@
         var ahead = -zRel - D;
         if (ahead > 0.45) ghost = 0.13 * Math.exp(-ahead / 20);
       }
-      var drawOp = Math.max(op, ghost);
+      var drawOp = Math.max(op, gapBack.i >= 0 ? 0 : ghost);
       if (drawOp < 0.004) continue;
 
       /* 画面比例裁切（等价于 object-fit: cover） */
@@ -1966,7 +2035,7 @@
     var cov = 0;
     for (var ci = 0; ci < drawn.length; ci++) cov += drawn[ci].mainOp;
     var plateA = Math.min(1, cov) * (1 - Math.max(earthMix, solarMix, galaxyMix));
-    if (plateA > 0.01 && blackTex) {
+    if (plateA > 0.01 && blackTex && gapBack.i < 0) {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, blackTex);
       bindAttr(progQ, 'aP', quadBuf, 2);
@@ -2621,6 +2690,7 @@
   var active = 0;
   var factTimer = null;
   var playing = false, rafId = null, playT0 = 0, playFrom = 0, lastTs = 0, voidNow = 0, voyageAmt = 0;
+  var gapBack = { i: -1, t: 0 };
   var dragY = null, dragStartU = 0, dragDist = 0;
   var lastPointer = null;
   var endPending = false, endShown = false;
@@ -2657,6 +2727,20 @@
     }
     voidNow = v;
     /* 影像不再在空白尺度里退场：整段旅程都是满屏叠化，星空只在影像之外露出 */
+
+    /* 站间穿越层：相邻两站的空档里，用满屏的推镜把两张图接起来。
+       gapT 从 0 走到 1；gapW 在两站正中最大，正好落在两张平面都退远、
+       露星空的时刻。大跨度（>2.8 个数量级）不参与，那里有专门的跃迁叙事。 */
+    gapBack.i = -1; gapBack.t = 0;
+    for (var gb = 0; gb < STAGES.length - 1; gb++) {
+      var gbGap = STAGES[gb + 1].u - STAGES[gb].u;
+      if (gbGap > 2.8) continue;
+      if (u > STAGES[gb].u && u < STAGES[gb + 1].u) {
+        gapBack.i = gb;
+        gapBack.t = (u - STAGES[gb].u) / gbGap;
+        break;
+      }
+    }
 
     /* 跃迁仪表的作用范围覆盖整段跨度，中段最强——毕竟"跨越"本身就是一段旅程 */
     var vw = 0;
